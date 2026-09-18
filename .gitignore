@@ -1,0 +1,19 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Generated dataset (recreate with generate_dataset.py)
+expanded/
+
+# Local deploy scratch
+PUBLIC_URL.txt
+/tmp/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
