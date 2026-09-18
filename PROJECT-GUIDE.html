@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<title>Vera AI Challenge — Complete Project Guide</title>
+<style>
+  @page { margin: 18mm; }
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.45; color: #111; max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 22pt; border-bottom: 2px solid #222; padding-bottom: 8px; }
+  h2 { font-size: 16pt; margin-top: 28px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  h3 { font-size: 13pt; margin-top: 18px; }
+  code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 9.5pt; }
+  pre { background: #f5f5f5; padding: 10px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; }
+  th, td { border: 1px solid #ccc; padding: 6px 8px; vertical-align: top; }
+  th { background: #f0f0f0; text-align: left; }
+  a { color: #0b57d0; text-decoration: none; }
+</style></head><body>
+<h1 id="vera-ai-challenge-complete-project-guide">Vera AI Challenge — Complete Project Guide</h1>
+<p>This document explains the <strong>entire project</strong> in plain language: what Magicpin asked for, what we built, every important term, and every step done so far.</p>
+<p><strong>Project folder:</strong> <code>~/Projects/vera-ai-challenge</code><br />
+<strong>GitHub repo:</strong> https://github.com/lovepreet166/vera-ai-challenge<br />
+<strong>Team:</strong> Lovepreet / Lovepreet Singh / lovepreetsingh40888@gmail.com</p>
+<hr />
+<h2 id="1-what-this-project-is-big-picture">1. What this project is (big picture)</h2>
+<h3 id="magicpin">Magicpin</h3>
+<p>An Indian local-commerce company. People discover nearby shops/restaurants on Magicpin; merchants (shop owners) get customers, offers, and visibility.</p>
+<h3 id="vera">Vera</h3>
+<p>Magicpin’s <strong>AI assistant for merchants</strong>. It talks to shop owners on <strong>WhatsApp</strong>, helps them improve Google listings, run campaigns, and sometimes message their customers.</p>
+<h3 id="magicpin-ai-challenge">magicpin AI Challenge</h3>
+<p>A hiring/filter contest. Instead of only a resume/interview, you <strong>build a bot like Vera (or better)</strong> and Magicpin’s systems <strong>score it automatically</strong>.</p>
+<p><strong>Official page:</strong> https://magicpin.com/vera/ai-challenge</p>
+<h3 id="what-you-must-build">What you must build</h3>
+<p>A <strong>public web API</strong> (a bot on the internet) that:</p>
+<ol>
+<li>Receives business data (category, merchant, triggers, customers)</li>
+<li>Decides <strong>when</strong> to message and <strong>what</strong> to say</li>
+<li>Handles replies (yes / stop / auto-reply / hostile)</li>
+<li>Stays online so Magicpin’s <strong>judge</strong> can call it</li>
+</ol>
+<hr />
+<h2 id="2-glossary-every-important-term">2. Glossary — every important term</h2>
+<h3 id="product-business-terms">Product / business terms</h3>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Merchant</strong></td>
+<td>Shop/clinic/salon owner (e.g. Dr. Meera’s Dental Clinic)</td>
+</tr>
+<tr>
+<td><strong>Customer</strong></td>
+<td>Person who visits that merchant (e.g. patient Priya)</td>
+</tr>
+<tr>
+<td><strong>Category / vertical</strong></td>
+<td>Type of business: dentists, salons, restaurants, gyms, pharmacies</td>
+</tr>
+<tr>
+<td><strong>WhatsApp message</strong></td>
+<td>Short chat message Vera would send</td>
+</tr>
+<tr>
+<td><strong>CTA (Call To Action)</strong></td>
+<td>What you want the person to do next (YES/NO, reply A/B, open question)</td>
+</tr>
+<tr>
+<td><strong>Offer</strong></td>
+<td>Deal like <code>Dental Cleaning @ ₹299</code> (service + price works better than vague “10% off”)</td>
+</tr>
+<tr>
+<td><strong>GBP</strong></td>
+<td>Google Business Profile (Google Maps listing)</td>
+</tr>
+<tr>
+<td><strong>Hinglish</strong></td>
+<td>Mix of Hindi + English, common for Indian merchants</td>
+</tr>
+<tr>
+<td><strong>Compulsion / engagement</strong></td>
+<td>How likely someone is to <strong>reply</strong>, not just read</td>
+</tr>
+<tr>
+<td><strong>Auto-reply</strong></td>
+<td>Phone’s canned WhatsApp Business reply (“Thanks for contacting…”) — not a real human</td>
+</tr>
+<tr>
+<td><strong>Intent</strong></td>
+<td>Merchant’s real meaning (e.g. “ok let’s do it” = start the action)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-4-context-layers-core-idea">The 4 context layers (core idea)</h3>
+<p>Every message is built from up to four JSON “context packs”:</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What it is</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>CategoryContext</strong></td>
+<td>Rules for that business type</td>
+<td>Dentist tone, taboo words, research digest</td>
+</tr>
+<tr>
+<td><strong>MerchantContext</strong></td>
+<td>This specific shop’s state</td>
+<td>CTR 2.1%, offers, owner name Meera</td>
+</tr>
+<tr>
+<td><strong>TriggerContext</strong></td>
+<td><strong>Why message now</strong></td>
+<td>Research digest released, recall due, Diwali</td>
+</tr>
+<tr>
+<td><strong>CustomerContext</strong></td>
+<td>Optional; for customer-facing msgs</td>
+<td>Priya, prefers weekday evenings</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Compose</strong> = turn those contexts into one WhatsApp message + CTA + rationale.</p>
+<h3 id="trigger-kinds-why-now-events">Trigger kinds (why-now events)</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>research_digest</code></td>
+<td>New research/news relevant to the category</td>
+</tr>
+<tr>
+<td><code>regulation_change</code></td>
+<td>Rule/compliance change with a deadline</td>
+</tr>
+<tr>
+<td><code>recall_due</code></td>
+<td>Customer due for a revisit (e.g. 6‑month cleaning)</td>
+</tr>
+<tr>
+<td><code>perf_dip</code> / <code>perf_spike</code></td>
+<td>Performance down / up</td>
+</tr>
+<tr>
+<td><code>curious_ask_due</code></td>
+<td>Light check-in question</td>
+</tr>
+<tr>
+<td><code>festival_upcoming</code></td>
+<td>Festival coming (e.g. Diwali)</td>
+</tr>
+<tr>
+<td><code>competitor_opened</code></td>
+<td>New competitor nearby on Maps</td>
+</tr>
+<tr>
+<td><code>ipl_match_today</code></td>
+<td>Cricket match affecting restaurants</td>
+</tr>
+<tr>
+<td><code>chronic_refill_due</code></td>
+<td>Pharmacy refill reminder</td>
+</tr>
+<tr>
+<td>…</td>
+<td>Many more in the dataset</td>
+</tr>
+</tbody>
+</table>
+<h3 id="api-engineering-terms">API / engineering terms</h3>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>API</strong></td>
+<td>Way for programs to talk over HTTP (URLs + JSON)</td>
+</tr>
+<tr>
+<td><strong>Endpoint</strong></td>
+<td>One URL path your bot exposes, e.g. <code>/v1/healthz</code></td>
+</tr>
+<tr>
+<td><strong>HTTP</strong></td>
+<td>Web request protocol (GET read, POST send data)</td>
+</tr>
+<tr>
+<td><strong>JSON</strong></td>
+<td>Text data format <code>{ "key": "value" }</code></td>
+</tr>
+<tr>
+<td><strong>FastAPI</strong></td>
+<td>Python framework for building APIs quickly</td>
+</tr>
+<tr>
+<td><strong>Uvicorn</strong></td>
+<td>Server that runs the FastAPI app</td>
+</tr>
+<tr>
+<td><strong>Stateful</strong></td>
+<td>Bot remembers contexts/conversations between calls (in memory)</td>
+</tr>
+<tr>
+<td><strong>Idempotent</strong></td>
+<td>Same request twice doesn’t break things (same context version = no-op)</td>
+</tr>
+<tr>
+<td><strong>Suppression key</strong></td>
+<td>Dedup id so the same nudge isn’t spammed</td>
+</tr>
+<tr>
+<td><strong>Timeout</strong></td>
+<td>Max wait (judge waits <strong>30 seconds</strong> per call)</td>
+</tr>
+<tr>
+<td><strong>Health check / healthz</strong></td>
+<td>“Are you alive?” endpoint</td>
+</tr>
+<tr>
+<td><strong>Metadata</strong></td>
+<td>Team name, model, approach info for the leaderboard</td>
+</tr>
+<tr>
+<td><strong>Dockerfile</strong></td>
+<td>Recipe to package the app into a <strong>container</strong></td>
+</tr>
+<tr>
+<td><strong>Container / Docker</strong></td>
+<td>Isolated runnable box with your app + dependencies</td>
+</tr>
+<tr>
+<td><strong>Environment variable</strong></td>
+<td>Config like API keys (<code>VERA_LLM_API_KEY</code>) not hard-coded in files</td>
+</tr>
+<tr>
+<td><code>.env</code></td>
+<td>Local file holding secrets (gitignored — never upload)</td>
+</tr>
+<tr>
+<td><strong>Git</strong></td>
+<td>Version control for code history</td>
+</tr>
+<tr>
+<td><strong>GitHub</strong></td>
+<td>Website hosting Git repos</td>
+</tr>
+<tr>
+<td><strong>Commit</strong></td>
+<td>Snapshot of code saved in Git</td>
+</tr>
+<tr>
+<td><strong>Push</strong></td>
+<td>Upload commits to GitHub</td>
+</tr>
+<tr>
+<td><strong>Repo / repository</strong></td>
+<td>Project folder on GitHub</td>
+</tr>
+<tr>
+<td><strong>CLI</strong></td>
+<td>Command-line tool (<code>gh</code>, <code>flyctl</code>, <code>curl</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="hosting-deploy-terms">Hosting / deploy terms</h3>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Localhost</strong></td>
+<td>Your own computer (<code>http://127.0.0.1:8080</code>) — Magicpin <strong>cannot</strong> reach this</td>
+</tr>
+<tr>
+<td><strong>Public URL</strong></td>
+<td>Internet address anyone (including the judge) can open</td>
+</tr>
+<tr>
+<td><strong>Deploy</strong></td>
+<td>Put the bot on a cloud computer so it runs without your laptop</td>
+</tr>
+<tr>
+<td><strong>Tunnel (Cloudflare)</strong></td>
+<td>Temporary bridge: internet → your Mac. Free but <strong>needs Mac on</strong></td>
+</tr>
+<tr>
+<td><code>*.trycloudflare.com</code></td>
+<td>Temporary Cloudflare tunnel hostname</td>
+</tr>
+<tr>
+<td><strong>Fly.io</strong></td>
+<td>Cloud host; free tier now usually needs a <strong>credit card</strong></td>
+</tr>
+<tr>
+<td><strong>Hugging Face Spaces</strong></td>
+<td>Host ML/apps; Docker spaces now often need <strong>PRO</strong></td>
+</tr>
+<tr>
+<td><strong>Back4app Containers</strong></td>
+<td>Cloud Docker host from GitHub; free tier exists but <strong>temp URLs may expire</strong></td>
+</tr>
+<tr>
+<td><code>*.b4a.run</code></td>
+<td>Back4app runtime URL</td>
+</tr>
+<tr>
+<td><strong>Permanent vs temporary URL</strong></td>
+<td>Permanent stays; temporary (e.g. 60 min) dies — bad for judging</td>
+</tr>
+<tr>
+<td><strong>Keep-alive</strong></td>
+<td>Script/process that pings the app / prevents Mac sleep</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ai-llm-terms">AI / LLM terms</h3>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>LLM</strong></td>
+<td>Large Language Model (ChatGPT-like model)</td>
+</tr>
+<tr>
+<td><strong>Groq</strong></td>
+<td>Fast LLM API provider (free tier with API key)</td>
+</tr>
+<tr>
+<td><strong>API key</strong></td>
+<td>Secret password for an API (<code>gsk_...</code> for Groq)</td>
+</tr>
+<tr>
+<td><strong>Deterministic composer</strong></td>
+<td>Rule/template message builder that works <strong>without</strong> an LLM</td>
+</tr>
+<tr>
+<td><strong>LLM polish</strong></td>
+<td>Optional: rewrite the template message with Groq for nicer wording</td>
+</tr>
+<tr>
+<td><strong>Temperature = 0</strong></td>
+<td>Make LLM outputs as repeatable as possible</td>
+</tr>
+<tr>
+<td><strong>Hallucination</strong></td>
+<td>Model invents facts not in context — <strong>penalized</strong> heavily</td>
+</tr>
+<tr>
+<td><strong>Judge / judge harness</strong></td>
+<td>Magicpin’s system that calls your bot and scores it</td>
+</tr>
+<tr>
+<td><strong>Judge simulator</strong></td>
+<td>Local script <code>judge_simulator.py</code> to practice scoring</td>
+</tr>
+<tr>
+<td><strong>Rubric</strong></td>
+<td>Scoring dimensions (each 0–10)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="scoring-dimensions-010-each">Scoring dimensions (0–10 each)</h3>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Decision quality</strong></td>
+<td>Did you pick the right signal / sometimes send nothing?</td>
+</tr>
+<tr>
+<td><strong>Specificity</strong></td>
+<td>Real numbers, offers, names from context</td>
+</tr>
+<tr>
+<td><strong>Category fit</strong></td>
+<td>Right tone for dentists vs salons vs restaurants</td>
+</tr>
+<tr>
+<td><strong>Merchant fit</strong></td>
+<td>Personalized to that shop’s metrics/history</td>
+</tr>
+<tr>
+<td><strong>Engagement compulsion</strong></td>
+<td>Clear, easy reason to reply now</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-what-magicpins-judge-calls-the-contract">3. What Magicpin’s judge calls (the contract)</h2>
+<p>Your bot must expose these endpoints:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/context</code></td>
+<td>Judge pushes category/merchant/customer/trigger data</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/tick</code></td>
+<td>Periodic wake-up; bot may return proactive messages</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/reply</code></td>
+<td>Merchant/customer replied; bot returns <code>send</code> / <code>wait</code> / <code>end</code></td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/healthz</code></td>
+<td>Liveness (“I’m up”)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/metadata</code></td>
+<td>Team + model info</td>
+</tr>
+</tbody>
+</table>
+<p>We also added:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/</code></td>
+<td>Friendly “bot is online” page (not required by judge)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/teardown</code></td>
+<td>Optional wipe of in-memory state</td>
+</tr>
+</tbody>
+</table>
+<h3 id="important-judge-rules">Important judge rules</h3>
+<ul>
+<li>Respond within <strong>~30 seconds</strong></li>
+<li>Max <strong>20 actions</strong> per <code>/v1/tick</code></li>
+<li>Empty <code>{"actions": []}</code> is OK (restraint is good)</li>
+<li>Don’t invent offers/competitors/numbers</li>
+<li>Detect auto-replies and hostile “stop”</li>
+<li>On “ok let’s do it”, switch to <strong>action</strong> (don’t keep asking qualifying questions)</li>
+</ul>
+<hr />
+<h2 id="4-project-file-map">4. Project file map</h2>
+<pre><code>vera-ai-challenge/
+├── bot.py                 # FastAPI server — all HTTP endpoints
+├── composer.py            # Builds WhatsApp messages from 4 contexts
+├── handlers.py            # Multi-turn reply logic (auto-reply / intent / hostile)
+├── state.py               # In-memory storage for contexts &amp; conversations
+├── requirements.txt       # Python packages
+├── Dockerfile             # How to run in Docker/cloud
+├── .env                   # Secrets locally (NOT on GitHub)
+├── .env.example           # Safe template for env vars
+├── .gitignore             # What Git must never upload
+├── README.md              # Short project readme
+├── DEPLOY.md              # Cloud deploy instructions
+├── PROJECT-GUIDE.md       # This document
+├── deploy.sh              # Fly.io deploy script (needs card)
+├── deploy-hf.sh           # Hugging Face deploy (needs PRO for Docker)
+├── keep-alive.sh          # Keep Mac + Cloudflare tunnel awake
+├── fly.toml               # Fly.io config
+├── judge_simulator.py     # Official local judge practice tool
+├── challenge-brief.md     # Official product/challenge brief
+├── challenge-testing-brief.md  # Official API/test contract
+├── engagement-design.md   # Messaging design notes
+├── engagement-research.md # Research notes
+├── dataset/               # Seeds + generator
+│   ├── categories/        # dentists, salons, ...
+│   ├── *_seed.json
+│   └── generate_dataset.py
+├── examples/              # API examples + case studies
+└── expanded/              # Generated full dataset (local; gitignored)
+</code></pre>
+<h3 id="main-code-roles">Main code roles</h3>
+<ol>
+<li><strong><code>bot.py</code></strong> — Receives HTTP calls, stores context, calls composer/handlers  </li>
+<li><strong><code>composer.py</code></strong> — <code>compose(category, merchant, trigger, customer?)</code> → message  </li>
+<li><strong><code>handlers.py</code></strong> — Interprets merchant replies  </li>
+<li><strong><code>state.py</code></strong> — Memory during one running process  </li>
+</ol>
+<hr />
+<h2 id="5-step-by-step-everything-we-did-so-far">5. Step-by-step — everything we did so far</h2>
+<h3 id="step-1-understood-the-assignment">Step 1 — Understood the assignment</h3>
+<ul>
+<li>Opened https://magicpin.com/vera/ai-challenge  </li>
+<li>Learned: build Vera’s message engine from 4 contexts; expose 5 HTTP endpoints; submit a <strong>public URL</strong></li>
+</ul>
+<h3 id="step-2-created-the-project">Step 2 — Created the project</h3>
+<ul>
+<li>Folder: <code>~/Projects/vera-ai-challenge</code></li>
+<li>Downloaded official zip from Magicpin partners site</li>
+<li>Unzipped briefs, dataset seeds, <code>judge_simulator.py</code></li>
+</ul>
+<h3 id="step-3-generated-the-full-dataset">Step 3 — Generated the full dataset</h3>
+<pre><code class="language-bash">python3 dataset/generate_dataset.py --seed-dir dataset --out expanded
+</code></pre>
+<p>Produces ~50 merchants, ~200 customers, ~100 triggers, 30 test pairs.</p>
+<h3 id="step-4-built-the-bot">Step 4 — Built the bot</h3>
+<p>Implemented:
+- All required endpoints
+- Trigger-kind message templates (grounded in real context fields)
+- Reply handling:
+  - auto-reply → <code>end</code>
+  - affirmative (“ok let’s do it”) → action mode
+  - hostile/stop → <code>end</code>
+- Optional Groq LLM polish if <code>VERA_LLM_API_KEY</code> is set</p>
+<h3 id="step-5-ran-locally">Step 5 — Ran locally</h3>
+<pre><code class="language-bash">uvicorn bot:app --host 0.0.0.0 --port 8080
+</code></pre>
+<p>Smoke-tested healthz, tick, reply scenarios successfully.</p>
+<h3 id="step-6-set-team-identity">Step 6 — Set team identity</h3>
+<pre><code class="language-text">VERA_TEAM_NAME=Lovepreet
+VERA_TEAM_MEMBERS=Lovepreet Singh
+VERA_CONTACT_EMAIL=lovepreetsingh40888@gmail.com
+</code></pre>
+<h3 id="step-7-added-groq-llm">Step 7 — Added Groq LLM</h3>
+<ul>
+<li>Created Groq API key</li>
+<li>Stored in <code>.env</code> (not committed)</li>
+<li>Metadata shows model <code>llama-3.3-70b-versatile</code></li>
+</ul>
+<h3 id="step-8-temporary-public-url-via-cloudflare-tunnel">Step 8 — Temporary public URL via Cloudflare tunnel</h3>
+<ul>
+<li>Installed <code>cloudflared</code></li>
+<li>Exposed localhost to a <code>*.trycloudflare.com</code> URL  </li>
+<li><strong>Limitation:</strong> Mac must stay on; URL can change if tunnel restarts  </li>
+<li>User rejected long-term Mac dependency</li>
+</ul>
+<h3 id="step-9-tried-flyio-cloud-no-mac">Step 9 — Tried Fly.io (cloud, no Mac)</h3>
+<ul>
+<li>Installed <code>flyctl</code>, prepared <code>Dockerfile</code> + <code>fly.toml</code> + <code>deploy.sh</code></li>
+<li>Login worked</li>
+<li><strong>Blocked:</strong> Fly required payment/card info to create the app</li>
+</ul>
+<h3 id="step-10-tried-hugging-face-spaces">Step 10 — Tried Hugging Face Spaces</h3>
+<ul>
+<li>Script <code>deploy-hf.sh</code>, login as <code>love2902</code> succeeded</li>
+<li><strong>Blocked:</strong> Docker Spaces require Hugging Face <strong>PRO</strong> (402 Payment Required)</li>
+</ul>
+<h3 id="step-11-github-backup-back4app-path">Step 11 — GitHub backup + Back4app path</h3>
+<ul>
+<li>Fixed GitHub CLI auth (<code>lovepreet166</code>)</li>
+<li>First commit created (<code>.env</code> excluded)</li>
+<li>Private repo: https://github.com/lovepreet166/vera-ai-challenge</li>
+<li>Documented Back4app free container deploy in <code>DEPLOY.md</code></li>
+</ul>
+<h3 id="step-12-deployed-on-back4app">Step 12 — Deployed on Back4app</h3>
+<ul>
+<li>Created Web Deployment from GitHub repo</li>
+<li>App came online at:</li>
+<li><code>https://veraaichallenge-r5txgnlv.b4a.run/</code></li>
+<li>Verified:</li>
+<li><code>/</code> → online JSON</li>
+<li><code>/v1/healthz</code> → ok</li>
+<li><code>/v1/metadata</code> → team + Groq model</li>
+<li><code>/v1/tick</code> → ok</li>
+<li><strong>Caveat:</strong> Back4app showed <strong>temporary URL (~60 minutes)</strong> unless upgraded to permanent</li>
+</ul>
+<h3 id="step-13-submission-constraint-clarified">Step 13 — Submission constraint clarified</h3>
+<p>Magicpin needs the bot <strong>active throughout judging</strong>.<br />
+A 60‑minute temporary URL is <strong>not safe</strong> to submit unless upgraded to a <strong>permanent</strong> URL (or another always-on host).</p>
+<hr />
+<h2 id="6-how-the-bot-decides-messages-simple-flow">6. How the bot decides messages (simple flow)</h2>
+<pre><code>Judge POST /v1/context  →  store category/merchant/trigger/customer
+         ↓
+Judge POST /v1/tick     →  for each active trigger:
+                              skip if expired/suppressed
+                              compose(category, merchant, trigger, customer?)
+                              return actions[] (or [])
+         ↓
+Judge plays merchant reply
+         ↓
+Judge POST /v1/reply    →  auto-reply / yes / stop / normal
+                              → send | wait | end
+</code></pre>
+<h3 id="example-of-a-strong-message-from-case-studies">Example of a strong message (from case studies)</h3>
+<p>Weak: “Hi Doctor, want a discount campaign?”<br />
+Strong: “190 people in your locality are searching for Dental Check Up. Should I send Cleaning @ ₹299?”</p>
+<hr />
+<h2 id="7-how-to-run-locally-for-you">7. How to run locally (for you)</h2>
+<pre><code class="language-bash">cd ~/Projects/vera-ai-challenge
+source .venv/bin/activate
+# .env already has team + Groq key
+uvicorn bot:app --host 0.0.0.0 --port 8080
+</code></pre>
+<p>Open:
+- http://127.0.0.1:8080/
+- http://127.0.0.1:8080/docs  (interactive API docs)
+- http://127.0.0.1:8080/v1/healthz</p>
+<p>Optional local judge practice (needs an LLM key inside <code>judge_simulator.py</code> for scoring):</p>
+<pre><code class="language-bash">export BOT_URL=http://localhost:8080
+python3 judge_simulator.py
+</code></pre>
+<hr />
+<h2 id="8-submission-checklist">8. Submission checklist</h2>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bot implements 5 endpoints</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>Team name/email in metadata</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>Groq LLM optional polish</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>Code on GitHub</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>Public cloud URL works</td>
+<td>Done (Back4app)</td>
+</tr>
+<tr>
+<td><strong>URL permanent for whole judging window</strong></td>
+<td><strong>Must confirm / upgrade</strong></td>
+</tr>
+<tr>
+<td>Mac can be off</td>
+<td>Only if URL is permanent cloud</td>
+</tr>
+</tbody>
+</table>
+<h3 id="safe-submit-url-rule">Safe submit URL rule</h3>
+<p>Submit a base URL like:</p>
+<pre><code class="language-text">https://veraaichallenge-r5txgnlv.b4a.run
+</code></pre>
+<p>Only if the dashboard says it will <strong>stay active</strong> (not “temporary 60 minutes”).</p>
+<hr />
+<h2 id="9-secrets-safety">9. Secrets &amp; safety</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Where</th>
+<th>Never do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Groq API key</td>
+<td><code>.env</code> + cloud env vars</td>
+<td>Don’t commit to GitHub / don’t paste in public chat long-term</td>
+</tr>
+<tr>
+<td>Fly/HF tokens</td>
+<td>Local CLI login</td>
+<td>Don’t share</td>
+</tr>
+<tr>
+<td>Merchant dataset</td>
+<td>Synthetic challenge data</td>
+<td>Fine to use in this project</td>
+</tr>
+</tbody>
+</table>
+<p>If a key was pasted in chat, <strong>rotate it</strong> later at the provider dashboard.</p>
+<hr />
+<h2 id="10-current-recommended-next-actions">10. Current recommended next actions</h2>
+<ol>
+<li>On Back4app, check if URL is temporary or permanent.  </li>
+<li>If temporary → <strong>Upgrade for Permanent URL</strong> (or move to Fly/AWS with a card).  </li>
+<li>Re-test <code>/v1/healthz</code> on the final URL.  </li>
+<li>Submit that <strong>permanent</strong> base URL on https://magicpin.com/vera/ai-challenge  </li>
+<li>Keep the cloud app running until results; Mac can sleep only if the cloud URL is permanent.</li>
+</ol>
+<hr />
+<h2 id="11-quick-who-talks-to-whom-diagram">11. Quick “who talks to whom” diagram</h2>
+<pre><code>┌────────────────────┐         HTTPS/JSON          ┌─────────────────────┐
+│  Magicpin Judge    │  ─────────────────────────► │  Your Vera bot      │
+│  (cloud)           │  ◄───────────────────────── │  (Back4app / Fly /  │
+│                    │   messages + actions        │   localhost+tunnel) │
+└────────────────────┘                             └─────────────────────┘
+                                                          │
+                                                          ▼
+                                                   Groq API (optional)
+                                                   for nicer wording
+</code></pre>
+<hr />
+<h2 id="12-one-sentence-summary">12. One-sentence summary</h2>
+<p><strong>We built a WhatsApp-style merchant AI bot for Magicpin’s Vera challenge, packaged it as a FastAPI service with real context-grounded messaging and reply handling, pushed it to GitHub, and deployed it to Back4app — submission is ready once the public URL is confirmed permanent for the full judging period.</strong></p>
+<hr />
+<p><em>Last updated: 19 Sep 2026</em><br />
+<em>For deploy clicks see <code>DEPLOY.md</code>. For short overview see <code>README.md</code>.</em></p>
+</body></html>

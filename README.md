@@ -15,26 +15,8 @@ Stateful WhatsApp merchant-growth bot for the [magicpin AI Challenge](https://ma
 
 **Team:** Lovepreet / Lovepreet Singh
 
-## Endpoints
+## Full documentation
 
-| Method | Path |
-|--------|------|
-| GET | `/v1/healthz` |
-| GET | `/v1/metadata` |
-| POST | `/v1/context` |
-| POST | `/v1/tick` |
-| POST | `/v1/reply` |
+Read **[PROJECT-GUIDE.md](./PROJECT-GUIDE.md)** — explains every term and every step done so far.
 
-## Local run
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn bot:app --host 0.0.0.0 --port 8080
-```
-
-## Free cloud deploy (no Mac, no credit card)
-
-See **[DEPLOY.md](./DEPLOY.md)** — Back4app Containers via GitHub.
-
-Fly.io / Hugging Face Docker currently require a card or Pro subscription.
+Deploy notes: **[DEPLOY.md](./DEPLOY.md)**

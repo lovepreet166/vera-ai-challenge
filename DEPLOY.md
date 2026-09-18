@@ -1,36 +1,23 @@
 # Deploy without your Mac (free, no credit card)
 
-## Why this path
+## Status (automated)
 
-Fly / Hugging Face / AWS need a card or Pro.  
-**Back4app Containers** free tier: no credit card, runs in the cloud from GitHub.
+- [x] Project committed (secrets excluded)
+- [x] GitHub login
+- [x] Private repo created + pushed: https://github.com/lovepreet166/vera-ai-challenge
+- [ ] Back4app container deploy (needs your free account — 5 min in browser)
 
-## Step 1 — Put code on GitHub
+## Step 2 — Back4app (do this once in browser)
 
-In **Terminal.app**:
-
-```bash
-cd ~/Projects/vera-ai-challenge
-
-# Fix GitHub login (browser will open)
-gh auth login -h github.com -p https -w
-
-# Create private repo + push
-git add -A
-git status   # confirm .env is NOT listed
-git commit -m "Initial Vera bot for magicpin AI challenge"
-gh repo create vera-ai-challenge --private --source=. --remote=origin --push
-```
-
-## Step 2 — Deploy on Back4app (cloud)
-
-1. Sign up free: https://www.back4app.com/  
-2. Open **Containers** / Web Deployment  
-3. Connect **GitHub** and select `vera-ai-challenge`  
+1. Open https://www.back4app.com/signup and create a **free** account (Google/GitHub login is fine).
+2. Go to **Containers as a Service** / **Web Deployment**.
+3. **Connect GitHub** → authorize → select repo **`lovepreet166/vera-ai-challenge`**.
 4. Create app:
-   - Dockerfile path: `./Dockerfile`
-   - Branch: `main`
-5. Add **environment variables** (same as your `.env`, do not commit secrets):
+   - **Name:** `vera-ai-challenge`
+   - **Branch:** `main`
+   - **Root directory:** `/` (Dockerfile is in repo root)
+   - **Dockerfile:** `./Dockerfile`
+5. Add environment variables:
 
 | Key | Value |
 |-----|--------|
@@ -39,21 +26,16 @@ gh repo create vera-ai-challenge --private --source=. --remote=origin --push
 | `VERA_CONTACT_EMAIL` | `lovepreetsingh40888@gmail.com` |
 | `VERA_LLM_PROVIDER` | `groq` |
 | `VERA_LLM_MODEL` | `llama-3.3-70b-versatile` |
-| `VERA_LLM_API_KEY` | *(your Groq key)* |
+| `VERA_LLM_API_KEY` | *(paste from your local `.env`)* |
 | `PORT` | `8080` |
 
-6. Deploy → copy the public URL Back4app gives you  
-7. Test: `https://YOUR-APP.../v1/healthz`  
-8. Submit **that base URL** on Magicpin  
+6. Click **Create / Deploy**. Wait for build to go green.
+7. Copy the public app URL from the sidebar **Actions** / Domains.
+8. Test: `https://YOUR-URL/v1/healthz`
+9. Submit that base URL on Magicpin.
 
-Then you can shut your Mac — the bot runs on Back4app.
+Then shut your Mac — the bot runs on Back4app.
 
-## Limits (free tier)
+## After you have the URL
 
-- ~256 MB RAM / shared CPU (enough for this bot)
-- Fine for the challenge; not a huge production cluster
-- Keep an eye on their free-plan transfer/hour limits
-
-## After deploy
-
-Paste the Back4app URL here and I’ll verify `/v1/healthz` + `/v1/metadata` for you.
+Paste it in chat and I’ll verify healthz + metadata.
