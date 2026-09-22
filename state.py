@@ -30,9 +30,11 @@ class ConversationState:
     merchant_id: Optional[str] = None
     customer_id: Optional[str] = None
     trigger_id: Optional[str] = None
+    trigger_kind: Optional[str] = None
     mode: str = "qualifying"  # qualifying | action | ended
     turns: List[Dict[str, Any]] = field(default_factory=list)
     auto_reply_hits: int = 0
+    action_sends: int = 0
     last_bot_body: Optional[str] = None
     started_at: str = field(default_factory=utc_now_iso)
 
@@ -136,6 +138,7 @@ class Store:
         merchant_id: Optional[str] = None,
         customer_id: Optional[str] = None,
         trigger_id: Optional[str] = None,
+        trigger_kind: Optional[str] = None,
     ) -> ConversationState:
         with self._lock:
             conv = self.conversations.get(conversation_id)
@@ -145,6 +148,7 @@ class Store:
                     merchant_id=merchant_id,
                     customer_id=customer_id,
                     trigger_id=trigger_id,
+                    trigger_kind=trigger_kind,
                 )
                 self.conversations[conversation_id] = conv
             else:
@@ -154,6 +158,8 @@ class Store:
                     conv.customer_id = customer_id
                 if trigger_id:
                     conv.trigger_id = trigger_id
+                if trigger_kind:
+                    conv.trigger_kind = trigger_kind
             return conv
 
     def new_conversation_id(self, merchant_id: str, trigger_id: str) -> str:

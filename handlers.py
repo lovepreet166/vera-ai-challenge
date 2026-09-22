@@ -18,7 +18,10 @@ AUTO_REPLY_PATTERNS = [
     r"leave a message",
     r"auto[- ]?reply",
     r"this is an automated",
+    r"i(?:'m| am) (?:an )?automated",
+    r"aapki jaankari ke liye",
     r"आपके संदेश के लिए धन्यवाद",
+    r"main ek automated",
 ]
 
 AFFIRMATIVE_PATTERNS = [
@@ -30,21 +33,23 @@ AFFIRMATIVE_PATTERNS = [
     r"lets? do it",
     r"let'?s do it",
     r"go ahead",
-    r"start",
+    r"\bstart\b",
     r"confirm",
     r"proceed",
-    r"sure",
+    r"\bsure\b",
     r"do it",
     r"kar do",
-    r"karo",
-    r"haan",
-    r"haa?n?\b",
+    r"\bkaro\b",
+    r"\bhaan\b",
+    r"\bhaa?n?\b",
     r"chalte hain",
     r"theek hai",
     r"thik hai",
     r"bilkul",
     r"send (it|me)",
-    r"draft",
+    r"\bdraft\b",
+    r"\bgo\b",
+    r"\bdo\b",
 ]
 
 NEGATIVE_PATTERNS = [
@@ -57,14 +62,14 @@ NEGATIVE_PATTERNS = [
     r"nahi chahiye",
     r"mat bhejo",
     r"leave me alone",
-    r"spam",
-    r"useless",
+    r"\bspam\b",
+    r"\buseless\b",
     r"shut up",
 ]
 
 HOSTILE_PATTERNS = [
-    r"spam",
-    r"useless",
+    r"\bspam\b",
+    r"\buseless\b",
     r"idiot",
     r"stupid",
     r"scam",
@@ -84,7 +89,6 @@ def is_auto_reply(message: str, conv: ConversationState) -> bool:
     for pat in AUTO_REPLY_PATTERNS:
         if re.search(pat, text):
             return True
-    # Verbatim repeat of prior merchant messages in this conversation
     merchant_msgs = [t["msg"] for t in conv.turns if t.get("from") == "merchant"]
     if len(merchant_msgs) >= 2 and merchant_msgs[-1] == merchant_msgs[-2]:
         return True
@@ -103,8 +107,93 @@ def is_negative_or_hostile(message: str) -> bool:
 
 def is_off_topic(message: str) -> bool:
     text = _norm(message)
-    topics = ["gst", "loan", "hotel", "flight", "income tax", "itr", "salary"]
+    topics = ["gst", "loan", "hotel", "flight", "income tax", "itr", "salary", "passport"]
     return any(t in text for t in topics)
+
+
+def _owner(merchant: Optional[Dict[str, Any]]) -> str:
+    return ((merchant or {}).get("identity") or {}).get("owner_first_name") or "there"
+
+
+def _active_offer(merchant: Optional[Dict[str, Any]]) -> Optional[str]:
+    for o in (merchant or {}).get("offers") or []:
+        if o.get("status") == "active" and o.get("title"):
+            return o["title"]
+    return None
+
+
+def _action_body(conv: ConversationState, merchant: Optional[Dict[str, Any]], turn: int) -> str:
+    """Concrete next step — varies by trigger kind and turn (not one canned line)."""
+    owner = _owner(merchant)
+    offer = _active_offer(merchant)
+    kind = (conv.trigger_kind or "").lower()
+    last = (conv.last_bot_body or "").lower()
+
+    # Second+ action turn: close the loop
+    if turn >= 2:
+        if offer:
+            return (
+                f"Sending now, {owner}. Draft locked around {offer}. "
+                f"Reply CONFIRM to publish, or EDIT with one change."
+            )
+        return (
+            f"Proceeding now, {owner} — draft is ready. "
+            f"Reply CONFIRM to send, or tell me one edit."
+        )
+
+    if "research" in kind or "digest" in kind or "abstract" in last or "jida" in last:
+        return (
+            f"Done {owner}. Pulling the abstract now + drafting a 90-sec patient WhatsApp. "
+            f"I'll paste both here in a minute — reply EDIT or CONFIRM."
+        )
+    if "recall" in kind or "appointment" in kind or "refill" in kind:
+        return (
+            f"Done {owner}. Booking/reminder flow started. "
+            f"I'll confirm the slot with the customer and update you. Reply STOP to cancel."
+        )
+    if "perf" in kind or "dip" in kind or "spike" in kind:
+        hook = f" around {offer}" if offer else ""
+        return (
+            f"Done {owner}. Drafting the recovery/momentum WhatsApp{hook} + a Google post now. "
+            f"Reply EDIT or CONFIRM when you see it."
+        )
+    if "festival" in kind or "ipl" in kind or "seasonal" in kind:
+        hook = f" featuring {offer}" if offer else ""
+        return (
+            f"Done {owner}. Drafting the timed campaign WhatsApp{hook} + Insta/Google line. "
+            f"Live draft in ~2 min — reply CONFIRM to push."
+        )
+    if "competitor" in kind:
+        hook = f" with {offer}" if offer else " with a photo refresh + clear offer pin"
+        return (
+            f"Done {owner}. Counter-move draft{hook} coming next. "
+            f"Reply CONFIRM to use it this week."
+        )
+    if "curious" in kind or "search" in last or "rising" in last:
+        hook = f" — {offer}" if offer else ""
+        return (
+            f"Done {owner}. Drafting the demand-catch WhatsApp{hook} + matching Google post. "
+            f"Reply EDIT or CONFIRM."
+        )
+    if "review" in kind:
+        return (
+            f"Done {owner}. Writing (1) a reply template for that review theme and "
+            f"(2) a 3-bullet ops fix note for your team. Reply CONFIRM."
+        )
+    if "renewal" in kind or "winback" in kind:
+        return (
+            f"Done {owner}. Preparing your 1-page ROI / renewal summary from recent activity. "
+            f"I'll send it here — reply if you want a shorter version."
+        )
+    if offer:
+        return (
+            f"Done {owner}. Next step: draft ready around {offer}. "
+            f"I'll send the WhatsApp copy + one Google post line. Reply EDIT or CONFIRM."
+        )
+    return (
+        f"Done {owner}. Switching to action — I'll deliver the concrete draft next "
+        f"(WhatsApp copy + next step). Reply EDIT or CONFIRM."
+    )
 
 
 def handle_reply(
@@ -126,34 +215,46 @@ def handle_reply(
             "rationale": "Merchant opted out or hostile; graceful exit.",
         }
 
-    # Auto-reply pollution — exit fast (production Vera burns 2–3 turns; we don't)
+    # Auto-reply: try once (gold Pattern B), then end
     if is_auto_reply(message, conv):
         conv.auto_reply_hits += 1
+        if conv.auto_reply_hits == 1:
+            owner = _owner(merchant)
+            body = (
+                f"Samajh gayi{', ' + owner if owner != 'there' else ''}. "
+                f"Before this goes to the team — want to see the exact next step yourself? "
+                f"2 minutes. Reply YES if you're the owner/manager, or I'll reconnect later."
+            )
+            conv.last_bot_body = body
+            return {
+                "action": "send",
+                "body": body,
+                "cta": "binary_yes_no",
+                "rationale": "First auto-reply hit: one owner-check (Pattern B), then stop if it repeats.",
+            }
         conv.mode = "ended"
         return {
             "action": "end",
-            "rationale": "Detected WhatsApp Business auto-reply; ending instead of burning turns.",
+            "rationale": "Repeated auto-reply; ending politely without burning more turns.",
         }
 
-    # Intent → action
+    # Intent → action (contextual deliverable)
     if is_affirmative(message) or conv.mode == "action":
         conv.mode = "action"
-        owner = ((merchant or {}).get("identity") or {}).get("owner_first_name") or "there"
-        body = (
-            f"Done {owner} — drafting now. Next: I'll send (1) the short WhatsApp copy and "
-            f"(2) a 1-line Google post. Reply EDIT if you want changes, or CONFIRM to publish."
-        )
+        send_n = conv.action_sends + 1
+        body = _action_body(conv, merchant, send_n)
+        conv.action_sends = send_n
         if conv.last_bot_body and body.strip() == conv.last_bot_body.strip():
             body = (
-                f"Proceeding now — here is the concrete next step: confirm the draft and I'll "
-                f"queue the send. Reply CONFIRM."
+                f"Here is the concrete next step: I'm queuing the send now. "
+                f"Reply CONFIRM to publish or STOP to hold."
             )
         conv.last_bot_body = body
         return {
             "action": "send",
             "body": body,
             "cta": "binary_yes_no",
-            "rationale": "Affirmative intent detected; switched qualifying→action with concrete next step.",
+            "rationale": "Affirmative intent → action mode with trigger-specific next step (no re-qualification).",
         }
 
     # Off-topic redirect
@@ -171,18 +272,25 @@ def handle_reply(
             "rationale": "Off-topic ask; stayed on-mission politely.",
         }
 
-    # Default: light qualifying advance (one clear question)
-    owner = ((merchant or {}).get("identity") or {}).get("owner_first_name") or "there"
-    body = (
-        f"Got it {owner}. To move fast: should I (A) draft the message now, or "
-        f"(B) adjust the offer/angle first? Reply A or B."
-    )
+    # Default: single low-friction binary
+    owner = _owner(merchant)
+    offer = _active_offer(merchant)
+    if offer:
+        body = (
+            f"Got it {owner}. Fastest path: should I draft around your live {offer} now (YES), "
+            f"or tweak the angle first (EDIT)?"
+        )
+    else:
+        body = (
+            f"Got it {owner}. To move fast: should I (A) draft the message now, or "
+            f"(B) adjust the offer/angle first? Reply A or B."
+        )
     if conv.last_bot_body and body == conv.last_bot_body:
-        body = f"Quick choice {owner}: draft now (YES) or pause for later (STOP)?"
+        body = f"Quick choice {owner}: draft now (YES) or pause (STOP)?"
     conv.last_bot_body = body
     return {
         "action": "send",
         "body": body,
         "cta": "binary_yes_no",
-        "rationale": "Continuing qualification with a single low-friction binary choice.",
+        "rationale": "Continuing qualification with one low-friction binary choice.",
     }

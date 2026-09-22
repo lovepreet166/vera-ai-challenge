@@ -31,10 +31,10 @@ MODEL_NAME = os.getenv("VERA_LLM_MODEL") or (
     "deterministic-composer+optional-llm" if not os.getenv("VERA_LLM_API_KEY") else os.getenv("VERA_LLM_PROVIDER", "llm")
 )
 APPROACH = (
-    "Trigger-kind dispatch composer grounded in 4 contexts, "
-    "with rule-based multi-turn (auto-reply/intent/hostile) and optional LLM polish."
+    "v1.1: trigger-kind + adaptive unknown-kind compose, high-compulsion CTAs, "
+    "Pattern-B auto-reply (try once then end), contextual action replies, optional Groq polish."
 )
-
+VERSION = "1.1.0"
 
 @app.get("/")
 async def root():
@@ -94,7 +94,7 @@ async def metadata():
         "model": MODEL_NAME,
         "approach": APPROACH,
         "contact_email": CONTACT_EMAIL,
-        "version": "1.0.0",
+        "version": VERSION,
         "submitted_at": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -156,6 +156,7 @@ async def tick(body: TickBody):
             merchant_id=merchant_id,
             customer_id=customer_id,
             trigger_id=trg_id,
+            trigger_kind=trigger.get("kind"),
         )
         conv.last_bot_body = composed["body"]
         conv.turns.append({"from": "vera", "msg": composed["body"]})
