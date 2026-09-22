@@ -21,9 +21,18 @@ except Exception:
     pass
 
 
-def _owner(merchant: Dict[str, Any]) -> str:
+def _owner(merchant: Dict[str, Any], category: Optional[Dict[str, Any]] = None) -> str:
+    """Prefer Dr. {name} for clinical categories — merchant-fit signal in the rubric."""
     identity = merchant.get("identity") or {}
-    return identity.get("owner_first_name") or (identity.get("name") or "there").split()[0]
+    first = identity.get("owner_first_name") or (identity.get("name") or "there").split()[0]
+    if not first or first == "there":
+        return "there"
+    name = (identity.get("name") or "").lower()
+    slug = ((category or {}).get("slug") or "").lower()
+    clinical = slug in {"dentists", "pharmacies"} or name.startswith("dr.")
+    if clinical and not first.lower().startswith("dr"):
+        return f"Dr. {first}"
+    return first
 
 
 def _biz_name(merchant: Dict[str, Any]) -> str:
@@ -44,12 +53,20 @@ def _languages(merchant: Dict[str, Any]) -> List[str]:
 
 
 def _wants_hinglish(merchant: Dict[str, Any], customer: Optional[Dict[str, Any]] = None) -> bool:
+    """Honor explicit language prefs; don't force Hinglish just because hi is listed."""
     if customer:
         pref = ((customer.get("identity") or {}).get("language_pref") or "").lower()
-        if "hi" in pref:
-            return True
+        if pref:
+            return "hi" in pref
+    identity = merchant.get("identity") or {}
+    pref = (identity.get("language_pref") or identity.get("preferred_language") or "").lower()
+    if pref:
+        return "hi" in pref
     langs = _languages(merchant)
-    return "hi" in langs
+    if not langs:
+        return False
+    # Primary language only — most merchants list en+hi; clinical peers prefer English
+    return str(langs[0]).lower().startswith("hi")
 
 
 def _active_offers(merchant: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -108,7 +125,7 @@ def _flatten_facts(obj: Any, prefix: str = "", out: Optional[List[str]] = None, 
 
 def _compose_adaptive(category, merchant, trigger, customer):
     """High-compulsion fallback for unknown / newly injected trigger kinds."""
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     kind = (trigger.get("kind") or "update").replace("_", " ")
     payload = trigger.get("payload") or {}
     offer = _first_active_offer_title(merchant, category)
@@ -202,10 +219,14 @@ def _resolve_send_as(trigger: Dict[str, Any], customer: Optional[Dict[str, Any]]
 def _compose_research_digest(category, merchant, trigger, customer):
     payload = trigger.get("payload") or {}
     item = _digest_item(category, payload.get("top_item_id"))
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     agg = merchant.get("customer_aggregate") or {}
     high_risk = agg.get("high_risk_adult_count")
+    hinglish = _wants_hinglish(merchant, customer)
 
+    if not item:
+        # Prefer newest digest when trigger doesn't name an id (adaptation path)
+        item = _newest_digest(category)
     if not item:
         body = (
             f"{owner}, a new research digest dropped for {category.get('display_name', 'your category')}. "
@@ -217,7 +238,7 @@ def _compose_research_digest(category, merchant, trigger, customer):
     source = item.get("source") or "source on file"
     trial_n = item.get("trial_n")
     summary = item.get("summary") or ""
-    # Pull a concrete number from summary if present
+    segment = (item.get("patient_segment") or "").replace("_", " ")
     pct_match = re.search(r"(\d+%)", summary)
     number_bit = ""
     if trial_n and pct_match:
@@ -230,18 +251,26 @@ def _compose_research_digest(category, merchant, trigger, customer):
     cohort = ""
     if high_risk:
         cohort = f" Relevant to your {high_risk} high-risk adult patients."
+    elif segment:
+        cohort = f" Relevant if your mix includes {segment}."
 
-    body = (
-        f"{owner}, {source} landed. One item for you: {title}{number_bit}.{cohort} "
-        f"Worth a 2-min look — want me to pull the abstract + draft a patient-ed WhatsApp?"
-    )
-    return body, "open_ended", "research digest + merchant cohort anchor + reciprocity CTA"
+    if hinglish:
+        body = (
+            f"{owner}, {source} aaya. One item: {title}{number_bit}.{cohort} "
+            f"2-min abstract worth it — abstract pull + patient WhatsApp draft karun?"
+        )
+    else:
+        body = (
+            f"{owner}, {source} landed. One item for you: {title}{number_bit}.{cohort} "
+            f"Worth a 2-min look — want me to pull the abstract + draft a patient-ed WhatsApp?"
+        )
+    return body, "open_ended", "research digest + source citation + merchant cohort + reciprocity CTA"
 
 
 def _compose_regulation_change(category, merchant, trigger, customer):
     payload = trigger.get("payload") or {}
     item = _digest_item(category, payload.get("top_item_id"))
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     deadline = payload.get("deadline_iso") or (item or {}).get("date") or "the deadline"
     title = (item or {}).get("title") or "a regulation update"
     source = (item or {}).get("source") or "regulator circular"
@@ -287,7 +316,7 @@ def _compose_recall_due(category, merchant, trigger, customer):
 
 
 def _compose_perf_dip(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     metric = payload.get("metric") or "calls"
     delta = payload.get("delta_pct")
@@ -315,7 +344,7 @@ def _compose_perf_dip(category, merchant, trigger, customer):
 
 
 def _compose_curious_ask(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     biz = _biz_name(merchant)
     locality = _locality(merchant)
     offer = _first_active_offer_title(merchant, category)
@@ -349,7 +378,7 @@ def _compose_curious_ask(category, merchant, trigger, customer):
 
 
 def _compose_festival(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     festival = payload.get("festival") or "the festival"
     days = payload.get("days_until")
@@ -365,7 +394,7 @@ def _compose_festival(category, merchant, trigger, customer):
 
 
 def _compose_competitor(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     distance = payload.get("distance_km")
     locality = _locality(merchant)
@@ -380,7 +409,7 @@ def _compose_competitor(category, merchant, trigger, customer):
 
 
 def _compose_ipl(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     match = payload.get("match") or "tonight's match"
     venue = payload.get("venue") or ""
@@ -402,7 +431,7 @@ def _compose_ipl(category, merchant, trigger, customer):
 
 
 def _compose_perf_spike(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     metric = payload.get("metric") or "views"
     delta = payload.get("delta_pct")
@@ -417,7 +446,7 @@ def _compose_perf_spike(category, merchant, trigger, customer):
 
 
 def _compose_milestone(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     milestone = payload.get("milestone") or payload.get("label") or "a milestone"
     value = payload.get("value")
@@ -430,7 +459,7 @@ def _compose_milestone(category, merchant, trigger, customer):
 
 
 def _compose_dormant(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     days = payload.get("days_silent") or payload.get("days_since_last_message") or 14
     body = (
@@ -443,7 +472,7 @@ def _compose_dormant(category, merchant, trigger, customer):
 def _compose_bridal(category, merchant, trigger, customer):
     payload = trigger.get("payload") or {}
     cust_name = ((customer or {}).get("identity") or {}).get("name") or "there"
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     biz = _biz_name(merchant)
     days = payload.get("days_to_wedding")
     wedding = payload.get("wedding_date")
@@ -492,7 +521,7 @@ def _compose_appointment_tomorrow(category, merchant, trigger, customer):
 
 
 def _compose_review_theme(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     theme = (payload.get("theme") or "a review theme").replace("_", " ")
     n = payload.get("occurrences_30d")
@@ -507,7 +536,7 @@ def _compose_review_theme(category, merchant, trigger, customer):
 
 
 def _compose_renewal(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     days = payload.get("days_remaining")
     plan = payload.get("plan") or (merchant.get("subscription") or {}).get("plan") or "Pro"
@@ -521,7 +550,7 @@ def _compose_renewal(category, merchant, trigger, customer):
 
 
 def _compose_supply_alert(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     item = payload.get("item") or payload.get("sku") or "a tracked item"
     affected = payload.get("affected_customers") or payload.get("customers_at_risk")
@@ -534,7 +563,7 @@ def _compose_supply_alert(category, merchant, trigger, customer):
 
 
 def _compose_active_planning(category, merchant, trigger, customer):
-    owner = _owner(merchant)
+    owner = _owner(merchant, category)
     payload = trigger.get("payload") or {}
     topic = payload.get("topic") or payload.get("program") or payload.get("ask_template") or "the plan you mentioned"
     body = (
@@ -630,6 +659,40 @@ def _resolve_composer(kind: str):
     return _compose_adaptive
 
 
+def _norm_num_token(n: str) -> str:
+    return n.replace(",", "").replace("₹", "").replace(" ", "").strip()
+
+
+def _collect_ground_tokens(*objs: Any) -> set:
+    """Numbers/currency tokens allowed in LLM output (anti-fabrication)."""
+    blob = json.dumps(objs, ensure_ascii=False)
+    raw = set(re.findall(r"\d[\d,]*(?:\.\d+)?%?", blob))
+    raw |= set(re.findall(r"₹\s?\d[\d,]*", blob))
+    out = set()
+    for n in raw:
+        out.add(n)
+        out.add(_norm_num_token(n))
+        if n.endswith("%"):
+            out.add(_norm_num_token(n[:-1]) + "%")
+    return out
+
+
+def _llm_body_grounded(body: str, allowed: set) -> bool:
+    """Reject hallucinated standalone numbers not present in contexts."""
+    claimed = set(re.findall(r"\d[\d,]*(?:\.\d+)?%?", body))
+    claimed |= set(re.findall(r"₹\s?\d[\d,]*", body))
+    for n in claimed:
+        if n in allowed or _norm_num_token(n) in allowed:
+            continue
+        if n.endswith("%") and (_norm_num_token(n[:-1]) + "%") in allowed:
+            continue
+        bare = _norm_num_token(n).rstrip("%")
+        if bare.isdigit() and int(bare) <= 2:
+            continue
+        return False
+    return True
+
+
 def _maybe_llm_compose(
     category: Dict[str, Any],
     merchant: Dict[str, Any],
@@ -642,33 +705,51 @@ def _maybe_llm_compose(
     if not provider or not api_key:
         return fallback
 
+    # Judge /tick timeout is 30s for the whole batch — keep LLM fast or fall back.
+    timeout_s = float(os.getenv("VERA_LLM_TIMEOUT", "6"))
+    voice = category.get("voice") or {}
+    hinglish = _wants_hinglish(merchant, customer)
+    salutation = _owner(merchant, category)
+
     system = (
-        "You are Vera, magicpin's merchant growth assistant on WhatsApp for Indian merchants.\n"
-        "Compose ONE high-compulsion message from the JSON contexts.\n\n"
-        "GOLD STANDARD (shape to match — use REAL facts from context only):\n"
-        '  "190 people in your locality are searching for Dental Check Up. '
-        'Should I send them a discounted check up at ₹299?"\n'
-        "That pattern = specific local signal + real offer + single CTA.\n\n"
-        "HARD RULES:\n"
-        "- Do NOT invent numbers, offers, competitor names, or sources not in context.\n"
-        "- Prefer service+price offers over vague 'discount/campaign'.\n"
-        "- One primary CTA only (binary preferred for action triggers).\n"
-        "- Peer/colleague tone; Hinglish OK if merchant languages include hi.\n"
-        "- Clearly communicate why-now from the trigger.\n"
-        "- If new digest items exist, prefer the newest relevant one.\n"
-        "- Keep it concise (2–4 short sentences).\n\n"
-        "Return ONLY JSON: {\"body\": str, \"cta\": \"binary_yes_no\"|\"open_ended\"|\"none\", \"rationale\": str}"
+        "You are Vera, magicpin's WhatsApp growth assistant for Indian merchants.\n"
+        "Write ONE message that would score 9–10/10 on: specificity, category fit, "
+        "merchant fit, trigger relevance, engagement compulsion.\n\n"
+        "SHAPE (use ONLY facts from JSON):\n"
+        "- Anchor on one concrete verifiable fact (number, source, date, slot, offer price).\n"
+        "- Cite source/page when research/compliance (e.g. JIDA p.14) — never invent sources.\n"
+        "- Match category voice (vocab_allowed; never vocab_taboo).\n"
+        "- Address the owner with the given salutation.\n"
+        "- Why-now must come from the trigger kind/payload.\n"
+        "- Prefer real live offers (service + ₹price) over vague 'discount campaign'.\n"
+        "- Compulsion: curiosity / social proof / loss aversion / effort externalization + ONE CTA.\n"
+        "- Binary CTA preferred for action triggers; open_ended only when asking a genuine question.\n"
+        "- Hinglish (natural hi-en mix) when language_pref says so; else clean English.\n"
+        "- Customer-facing: honor language_pref; no medical claims for dentists.\n"
+        "- 2–4 short sentences. No URLs. No competitor names unless in context.\n"
+        "- Prefer NEWEST digest / LATEST performance numbers when multiple exist.\n"
+        "- Judgment OK (e.g. skip a bad promo timing) if payload supports it.\n\n"
+        f"Salutation to use: {salutation}\n"
+        f"Hinglish preferred: {hinglish}\n"
+        f"Category tone: {voice.get('tone')}; register: {voice.get('register')}\n"
+        f"Allowed vocab sample: {', '.join((voice.get('vocab_allowed') or [])[:8])}\n"
+        f"Taboo vocab: {', '.join((voice.get('vocab_taboo') or [])[:6])}\n\n"
+        "A strong deterministic draft is provided — improve compulsion & voice, "
+        "but KEEP every number/source/offer grounded. If unsure, keep the draft.\n\n"
+        'Return ONLY JSON: {"body": str, "cta": "binary_yes_no"|"open_ended"|"none", "rationale": str}'
     )
-    # Compact context for speed/timeouts — still includes newest digests
-    digest = (category.get("digest") or [])[-3:]
+    digest = (category.get("digest") or [])[-4:]
+    hist = (merchant.get("conversation_history") or merchant.get("history") or [])[-3:]
     slim = {
         "category": {
             "slug": category.get("slug"),
-            "voice": category.get("voice"),
+            "display_name": category.get("display_name"),
+            "voice": voice,
             "peer_stats": category.get("peer_stats"),
             "trend_signals": category.get("trend_signals"),
+            "seasonal_beats": (category.get("seasonal_beats") or [])[:2],
             "digest_newest": digest,
-            "offer_catalog": (category.get("offer_catalog") or [])[:4],
+            "offer_catalog": (category.get("offer_catalog") or [])[:5],
         },
         "merchant": {
             "merchant_id": merchant.get("merchant_id"),
@@ -677,68 +758,53 @@ def _maybe_llm_compose(
             "offers": merchant.get("offers"),
             "signals": merchant.get("signals"),
             "customer_aggregate": merchant.get("customer_aggregate"),
+            "subscription": merchant.get("subscription"),
+            "recent_history": hist,
         },
         "trigger": trigger,
         "customer": customer,
-        "fallback_example": {
+        "deterministic_draft": {
             "body": fallback.get("body"),
             "cta": fallback.get("cta"),
             "rationale": fallback.get("rationale"),
         },
     }
-    user = json.dumps(slim, ensure_ascii=False)[:80000]
+    user = json.dumps(slim, ensure_ascii=False)[:90000]
+    allowed = _collect_ground_tokens(slim)
 
     try:
+        model = os.getenv("VERA_LLM_MODEL") or (
+            "gpt-4o-mini" if provider == "openai" else "llama-3.3-70b-versatile"
+        )
+        payload = {
+            "model": model,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
         if provider == "openai":
-            model = os.getenv("VERA_LLM_MODEL") or "gpt-4o-mini"
-            payload = {
-                "model": model,
-                "temperature": 0,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "response_format": {"type": "json_object"},
-            }
-            req = urlrequest.Request(
-                "https://api.openai.com/v1/chat/completions",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                method="POST",
-            )
-            with urlrequest.urlopen(req, timeout=18) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            text = data["choices"][0]["message"]["content"]
+            url = "https://api.openai.com/v1/chat/completions"
         elif provider == "groq":
-            model = os.getenv("VERA_LLM_MODEL") or "llama-3.3-70b-versatile"
-            payload = {
-                "model": model,
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            }
-            req = urlrequest.Request(
-                "https://api.groq.com/openai/v1/chat/completions",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                method="POST",
-            )
-            with urlrequest.urlopen(req, timeout=18) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            text = data["choices"][0]["message"]["content"]
+            url = "https://api.groq.com/openai/v1/chat/completions"
         else:
             return fallback
 
-        # Groq sometimes wraps ```json
+        req = urlrequest.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        with urlrequest.urlopen(req, timeout=timeout_s) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        text = data["choices"][0]["message"]["content"]
+
         text = text.strip()
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -748,6 +814,13 @@ def _maybe_llm_compose(
         body = (parsed.get("body") or "").strip()
         if not body or "http://" in body.lower() or re.search(r"\bwww\.", body.lower()):
             return fallback
+        if not _llm_body_grounded(body, allowed):
+            return fallback
+        # Soft check: taboo phrases (whole phrase, not partial digits like "100")
+        taboo = [t.lower().split("(")[0].strip() for t in (voice.get("vocab_taboo") or []) if isinstance(t, str)]
+        low = body.lower()
+        if any(t and len(t) > 3 and t in low for t in taboo):
+            return fallback
         cta = parsed.get("cta") or fallback["cta"]
         if cta not in {"binary_yes_no", "open_ended", "none"}:
             cta = fallback["cta"]
@@ -755,7 +828,7 @@ def _maybe_llm_compose(
             **fallback,
             "body": body,
             "cta": cta,
-            "rationale": parsed.get("rationale") or fallback["rationale"],
+            "rationale": (parsed.get("rationale") or fallback["rationale"])[:280],
         }
     except Exception:
         return fallback
@@ -779,9 +852,9 @@ def compose(
         "send_as": send_as,
         "suppression_key": suppression_key,
         "rationale": rationale,
-        "template_name": f"vera_{kind}_v1",
+        "template_name": f"vera_{kind}_v2",
         "template_params": [
-            _owner(merchant),
+            _owner(merchant, category),
             kind,
             (trigger.get("payload") or {}).get("top_item_id")
             or (trigger.get("payload") or {}).get("festival")

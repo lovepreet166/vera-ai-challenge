@@ -22,19 +22,27 @@ from state import store
 
 load_dotenv()
 
-app = FastAPI(title="Vera — magicpin AI Challenge", version="1.0.0")
+app = FastAPI(title="Vera — magicpin AI Challenge", version="1.2.0")
 
 TEAM_NAME = os.getenv("VERA_TEAM_NAME", "Lovepreet")
 TEAM_MEMBERS = [m.strip() for m in os.getenv("VERA_TEAM_MEMBERS", "Lovepreet Singh").split(",") if m.strip()]
 CONTACT_EMAIL = os.getenv("VERA_CONTACT_EMAIL", "lovepreetsingh40888@gmail.com")
-MODEL_NAME = os.getenv("VERA_LLM_MODEL") or (
-    "deterministic-composer+optional-llm" if not os.getenv("VERA_LLM_API_KEY") else os.getenv("VERA_LLM_PROVIDER", "llm")
-)
+
+
+def _model_label() -> str:
+    if os.getenv("VERA_LLM_API_KEY") and os.getenv("VERA_LLM_PROVIDER"):
+        return os.getenv("VERA_LLM_MODEL") or os.getenv("VERA_LLM_PROVIDER") or "llm"
+    return "deterministic-composer+optional-llm"
+
+
+MODEL_NAME = _model_label()
 APPROACH = (
-    "v1.1: trigger-kind + adaptive unknown-kind compose, high-compulsion CTAs, "
-    "Pattern-B auto-reply (try once then end), contextual action replies, optional Groq polish."
+    "v1.2: gold-pattern grounded compose (citations/numbers/offers), "
+    "category voice + Dr. salutation, newest-digest adaptation, "
+    "Groq polish with anti-fabrication + 6s fail-fast, "
+    "Pattern-B auto-reply / intent→action / hostile+off-topic replay-ready."
 )
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 @app.get("/")
 async def root():

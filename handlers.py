@@ -207,12 +207,12 @@ def handle_reply(
             "rationale": "Conversation already ended; not re-opening.",
         }
 
-    # Hostile / hard opt-out first
+    # Hostile / hard opt-out first (replay: abuse → end gracefully, don't argue)
     if is_negative_or_hostile(message):
         conv.mode = "ended"
         return {
             "action": "end",
-            "rationale": "Merchant opted out or hostile; graceful exit.",
+            "rationale": "Merchant opted out or hostile; graceful exit with no further pushes.",
         }
 
     # Auto-reply: try once (gold Pattern B), then end
@@ -220,10 +220,11 @@ def handle_reply(
         conv.auto_reply_hits += 1
         if conv.auto_reply_hits == 1:
             owner = _owner(merchant)
+            name = f" {owner}" if owner != "there" else ""
             body = (
-                f"Samajh gayi{', ' + owner if owner != 'there' else ''}. "
-                f"Before this goes to the team — want to see the exact next step yourself? "
-                f"2 minutes. Reply YES if you're the owner/manager, or I'll reconnect later."
+                f"Samajh gayi{name}. Team tak pahunchane se pehle — "
+                f"kya aap khud dekhna chahenge ki exact next step kya hai? "
+                f"2 minute ka kaam hai. Owner/manager ho to YES, warna main later reconnect kar lungi."
             )
             conv.last_bot_body = body
             return {
@@ -232,6 +233,7 @@ def handle_reply(
                 "cta": "binary_yes_no",
                 "rationale": "First auto-reply hit: one owner-check (Pattern B), then stop if it repeats.",
             }
+        # Replay "auto-reply hell": same canned text repeatedly → polite exit, no more burns
         conv.mode = "ended"
         return {
             "action": "end",
@@ -257,12 +259,12 @@ def handle_reply(
             "rationale": "Affirmative intent → action mode with trigger-specific next step (no re-qualification).",
         }
 
-    # Off-topic redirect
+    # Off-topic redirect (replay: GST/loan etc. — stay on-mission, don't pretend expertise)
     if is_off_topic(message):
         body = (
-            "Got it — that's outside what I can help with here. "
-            "I can still help with Google profile, offers, campaigns, or customer recalls. "
-            "Want to continue on one of those?"
+            "Samajh gayi — GST/tax/loan isn't something I handle. "
+            "I can help with Google profile, offers, campaigns, or customer recalls. "
+            "Want to continue on one of those, or should I stop here?"
         )
         conv.last_bot_body = body
         return {

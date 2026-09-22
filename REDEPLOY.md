@@ -1,26 +1,37 @@
-# Redeploy v1.1 fixes to your VPS (no Mac dependency for judging)
+# Redeploy v1.2 (required for 75+ attempt)
 
-SSH into the server that hosts https://vera.65.20.84.111.sslip.io and run:
+Magicpin scores the **live URL**, not GitHub. After pushing, SSH into the VPS that hosts
+`https://vera.65.20.84.111.sslip.io` and run:
 
 ```bash
-cd /path/to/vera-ai-challenge   # wherever the repo lives on the VPS
-git pull origin main            # after you push these fixes
+# Paste your Groq key once
+export GROQ_KEY='gsk_...'   # from https://console.groq.com/keys
 
-# Enable Groq (required for better wording scores)
-export VERA_LLM_PROVIDER=groq
-export VERA_LLM_API_KEY='your_groq_key'
-export VERA_LLM_MODEL=llama-3.3-70b-versatile
-export VERA_TEAM_NAME=Lovepreet
-export VERA_TEAM_MEMBERS='Lovepreet Singh'
-export VERA_CONTACT_EMAIL=lovepreetsingh40888@gmail.com
+cd ~/vera-ai-challenge 2>/dev/null || cd /root/vera-ai-challenge 2>/dev/null || cd /home/*/vera-ai-challenge
+git fetch origin && git reset --hard origin/main
 
-# Restart
+python3 -m venv .venv 2>/dev/null || true
+.venv/bin/pip install -q -r requirements.txt
+
+# Persist env for restarts
+cat > .env <<EOF
+VERA_TEAM_NAME=Lovepreet
+VERA_TEAM_MEMBERS=Lovepreet Singh
+VERA_CONTACT_EMAIL=lovepreetsingh40888@gmail.com
+VERA_LLM_PROVIDER=groq
+VERA_LLM_API_KEY=$GROQ_KEY
+VERA_LLM_MODEL=llama-3.3-70b-versatile
+VERA_LLM_TIMEOUT=6
+EOF
+
 pkill -f 'uvicorn bot:app' || true
 nohup .venv/bin/uvicorn bot:app --host 0.0.0.0 --port 8080 > /tmp/vera.log 2>&1 &
-
-# Verify
+sleep 2
 curl -s https://vera.65.20.84.111.sslip.io/v1/metadata
-# model should show llama-3.3-70b-versatile (not deterministic-composer...)
 ```
 
-If the app is managed by systemd/docker-compose, restart that service instead and set the same env vars there.
+**Must show:**
+- `"version": "1.2.0"`
+- `"model": "llama-3.3-70b-versatile"` (not `deterministic-composer...`)
+
+Then email Magicpin HR and ask to **re-run judging** on the same URL.
