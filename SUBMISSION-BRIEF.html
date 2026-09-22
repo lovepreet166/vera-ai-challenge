@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<title>Vera AI Challenge — Submission Brief | Lovepreet Singh</title>
+<style>
+  @page { margin: 16mm; }
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.45; color: #111; max-width: 800px; margin: 0 auto; padding: 28px; }
+  h1 { font-size: 20pt; margin-bottom: 6px; }
+  h2 { font-size: 13.5pt; margin-top: 22px; color: #1a1a1a; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 10pt; }
+  th, td { border: 1px solid #ccc; padding: 6px 8px; vertical-align: top; }
+  th { background: #f3f3f3; text-align: left; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: 9.5pt; background: #f5f5f5; padding: 1px 4px; border-radius: 3px; }
+  strong { color: #000; }
+</style></head><body><h1>Vera AI Challenge — Submission Brief</h1>
+<p><strong>Candidate:</strong> Lovepreet Singh<br />
+<strong>Email:</strong> lovepreetsingh40888@gmail.com<br />
+<strong>Date:</strong> 19 September 2026<br />
+<strong>Challenge:</strong> magicpin Vera AI Challenge  </p>
+<hr />
+<h2>1. Public bot URL (for evaluation)</h2>
+<p><strong>https://vera.65.20.84.111.sslip.io</strong></p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Endpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Liveness</td>
+<td><code>GET /v1/healthz</code></td>
+</tr>
+<tr>
+<td>Team / approach</td>
+<td><code>GET /v1/metadata</code></td>
+</tr>
+<tr>
+<td>Interactive docs</td>
+<td><code>GET /docs</code></td>
+</tr>
+</tbody>
+</table>
+<p>The service is deployed on a cloud VPS and will remain online for the evaluation window.</p>
+<hr />
+<h2>2. What I built</h2>
+<p>A <strong>stateful HTTP bot</strong> that implements Magicpin’s Vera message engine:</p>
+<ul>
+<li>Ingests the <strong>4-context framework</strong> (Category, Merchant, Trigger, Customer)</li>
+<li>Composes grounded WhatsApp-style messages with a clear CTA and rationale</li>
+<li>Handles multi-turn merchant replies (<code>send</code> / <code>wait</code> / <code>end</code>)</li>
+<li>Exposes the full judge contract: <code>/v1/context</code>, <code>/v1/tick</code>, <code>/v1/reply</code>, <code>/v1/healthz</code>, <code>/v1/metadata</code></li>
+</ul>
+<hr />
+<h2>3. Approach (how it thinks)</h2>
+<h3>Message composition</h3>
+<ul>
+<li><strong>Trigger-kind dispatch</strong> — different framing for research digest, recall, perf dip, festival, competitor, IPL, etc.</li>
+<li><strong>Grounded in context only</strong> — numbers, offers, digest titles, slots, and names come from pushed JSON (no invented competitors or fake offers)</li>
+<li><strong>Category + merchant fit</strong> — peer CTR, active offers, owner first name, Hinglish when <code>hi</code> is in languages</li>
+<li><strong>Restraint</strong> — suppression keys, expiry checks, one proactive action per merchant per tick; empty <code>actions: []</code> when nothing is worth sending</li>
+</ul>
+<h3>Multi-turn conversation quality</h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>WhatsApp Business auto-reply</td>
+<td>Detect canned patterns → exit quickly (don’t burn turns)</td>
+</tr>
+<tr>
+<td>Affirmative intent (“ok let’s do it”, “haan”)</td>
+<td>Switch qualifying → <strong>action</strong>; deliver concrete next step</td>
+</tr>
+<tr>
+<td>Hostile / “stop” / not interested</td>
+<td>Graceful <code>end</code></td>
+</tr>
+<tr>
+<td>Off-topic (e.g. GST)</td>
+<td>Stay on-mission politely</td>
+</tr>
+</tbody>
+</table>
+<h3>Stack</h3>
+<ul>
+<li><strong>Python + FastAPI + Uvicorn</strong></li>
+<li>Deterministic composer (reliable under 30s timeouts)</li>
+<li>Optional LLM polish via Groq (can be enabled without changing the API contract)</li>
+<li>Docker-ready; currently running on a persistent VPS (<code>sslip.io</code>)</li>
+</ul>
+<hr />
+<h2>4. Design principles aligned with Vera’s pain points</h2>
+<p>From the challenge brief, production Vera struggles with auto-reply pollution, intent handoff failures, and generic copy. This submission targets those directly:</p>
+<ol>
+<li><strong>Faster auto-reply exit</strong> — don’t waste 2–3 turns  </li>
+<li><strong>Immediate action on clear intent</strong> — no re-qualification after “let’s do it”  </li>
+<li><strong>Service+price specificity</strong> — e.g. Cleaning @ ₹299, not vague “10% off”  </li>
+<li><strong>Curiosity / reciprocity levers</strong> where the trigger supports them (research digests, curious-ask)</li>
+</ol>
+<hr />
+<h2>5. Example of output quality</h2>
+<p><strong>Weak (generic):</strong><br />
+“Hi Doctor, want to run a discount campaign today?”</p>
+<p><strong>This bot (grounded):</strong><br />
+Uses merchant CTR vs peer median, live catalog offers, digest source/page, customer slots and language preference — then asks one low-friction next step.</p>
+<hr />
+<h2>6. Code &amp; reproducibility</h2>
+<ul>
+<li>Private GitHub repository with full source, Dockerfile, and documentation  </li>
+<li>Repo: <code>https://github.com/lovepreet166/vera-ai-challenge</code> (collaborator access available on request)  </li>
+<li>Local self-test via Magicpin’s <code>judge_simulator.py</code> contract  </li>
+<li>Expanded dataset generated from the official seed pack</li>
+</ul>
+<hr />
+<h2>7. Operational readiness</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Public HTTPS URL</td>
+<td>Live</td>
+</tr>
+<tr>
+<td>Health checks</td>
+<td>Passing</td>
+</tr>
+<tr>
+<td>Team metadata</td>
+<td>Lovepreet / Lovepreet Singh</td>
+</tr>
+<tr>
+<td>Timeout-safe responses</td>
+<td>Designed for ≤30s</td>
+</tr>
+<tr>
+<td>Judging window uptime</td>
+<td>VPS kept running</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>8. Closing</h2>
+<p>I’m excited about Vera’s merchant-growth problem space and happy to walk through architecture, trade-offs, or a live trace of <code>/v1/tick</code> + <code>/v1/reply</code> during review.</p>
+<p><strong>Thank you for the opportunity.</strong><br />
+— Lovepreet Singh<br />
+lovepreetsingh40888@gmail.com</p></body></html>
