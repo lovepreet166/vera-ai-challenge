@@ -1,0 +1,30 @@
+# Render Blueprint — https://dashboard.render.com/blueprint/new?repo=https://github.com/lovepreet166/vera-ai-challenge
+services:
+  - type: web
+    name: vera-ai-challenge
+    runtime: python
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn bot:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /v1/healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: VERA_TEAM_NAME
+        value: Lovepreet
+      - key: VERA_TEAM_MEMBERS
+        value: Lovepreet Singh
+      - key: VERA_CONTACT_EMAIL
+        value: lovepreetsingh40888@gmail.com
+      - key: VERA_LLM_PROVIDER
+        value: groq
+      - key: VERA_LLM_MODEL
+        value: llama-3.3-70b-versatile
+      - key: VERA_LLM_TIMEOUT
+        value: "6"
+      # Paste your Groq key in the Render dashboard when prompted
+      - key: VERA_LLM_API_KEY
+        sync: false
