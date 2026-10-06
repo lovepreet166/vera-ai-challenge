@@ -1,298 +1,418 @@
-"""Multi-turn reply handling: auto-reply, intent, hostile/exit, action mode."""
+"""Multi-turn reply handling.
+
+Routing order (first match wins):
+  ended -> opt-out -> abuse -> auto-reply -> customer booking flow -> join/action intent
+  -> soft refusal / wait -> off-topic -> question -> affirmative -> unclear
+
+Every send is checked against all previous bot bodies in the conversation, and the
+bot exits after MAX_BOT_TURNS so it never loops.
+"""
 
 from __future__ import annotations
 
 import re
 from typing import Any, Dict, Optional
 
+from composer import _biz_name, _customer_name, _digest_by_id, _digest_by_kind, _live_offers, _owner
 from state import ConversationState
 
-
-AUTO_REPLY_PATTERNS = [
-    r"thank you for contacting",
-    r"thanks for contacting",
-    r"our team will (get back|respond|reply)",
-    r"we will (get back|respond) (to you )?shortly",
-    r"we(?:'re| are) currently unavailable",
-    r"business hours",
-    r"leave a message",
-    r"auto[- ]?reply",
-    r"this is an automated",
-    r"i(?:'m| am) (?:an )?automated",
-    r"aapki jaankari ke liye",
-    r"आपके संदेश के लिए धन्यवाद",
-    r"main ek automated",
-]
-
-AFFIRMATIVE_PATTERNS = [
-    r"\byes\b",
-    r"\byeah\b",
-    r"\byep\b",
-    r"\bok\b",
-    r"\bokay\b",
-    r"lets? do it",
-    r"let'?s do it",
-    r"go ahead",
-    r"\bstart\b",
-    r"confirm",
-    r"proceed",
-    r"\bsure\b",
-    r"do it",
-    r"kar do",
-    r"\bkaro\b",
-    r"\bhaan\b",
-    r"\bhaa?n?\b",
-    r"chalte hain",
-    r"theek hai",
-    r"thik hai",
-    r"bilkul",
-    r"send (it|me)",
-    r"\bdraft\b",
-    r"\bgo\b",
-    r"\bdo\b",
-]
-
-NEGATIVE_PATTERNS = [
-    r"\bstop\b",
-    r"unsubscribe",
-    r"not interested",
-    r"no thanks",
-    r"don'?t (message|contact|text)",
-    r"band karo",
-    r"nahi chahiye",
-    r"mat bhejo",
-    r"leave me alone",
-    r"\bspam\b",
-    r"\buseless\b",
-    r"shut up",
-]
-
-HOSTILE_PATTERNS = [
-    r"\bspam\b",
-    r"\buseless\b",
-    r"idiot",
-    r"stupid",
-    r"scam",
-    r"fraud",
-    r"harass",
-]
+MAX_BOT_TURNS = 6
 
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _has(text: str, phrases) -> bool:
+    """Whole-word / whole-phrase match (no more 'do' matching 'what do you do')."""
+    return any(re.search(rf"(?<![\w']){re.escape(p)}(?![\w'])", text) for p in phrases)
+
+
+OPT_OUT = [
+    "unsubscribe", "stop messaging", "stop sending", "stop texting", "stop messages", "not interested", "no thanks", "don't message", "dont message",
+    "do not message", "don't contact", "dont contact", "remove me", "band karo", "nahi chahiye",
+    "mat bhejo", "message mat karo", "leave me alone",
+]
+ABUSE = [
+    "idiot", "stupid", "useless", "spam", "scam", "fraud", "bakwas", "shut up", "nonsense",
+    "harass", "pagal", "bewakoof", "wasting my time",
+]
+AUTO_REPLY = [
+    r"thank(s| you) for (contacting|reaching|your message|messaging)",
+    r"our team will (get back|respond|reply|contact|revert)",
+    r"we (will|'ll) (get back|respond|revert|reply)",
+    r"currently (unavailable|away|closed)",
+    r"(outside|during) (our )?(business|working|office) hours",
+    r"our (business|working) hours are",
+    r"leave (us )?a message",
+    r"auto[- ]?(reply|response|generated)",
+    r"(this is an|i am an|i'm an) automated",
+    r"main ek automated",
+    r"aapki jaankari ke liye",
+    r"team tak pahuncha",
+    r"आपके संदेश के लिए धन्यवाद",
+]
+JOIN_INTENT = [
+    "join", "judna", "judrna", "jud na", "jodna", "judna hai", "sign up", "signup", "sign me up",
+    "register", "onboard", "start karo", "chalu karo", "shuru karo", "i want to start",
+]
+AFFIRM = [
+    "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "go ahead", "let's do it", "lets do it",
+    "do it", "proceed", "confirm", "confirmed", "haan", "han", "ha", "ji", "ji haan", "bilkul",
+    "theek hai", "thik hai", "kar do", "karo", "chalo", "send it", "send me", "please do",
+    "sounds good", "perfect", "done", "approved", "publish", "no problem", "👍",
+]
+SOFT_NO = ["no", "nope", "nahi", "nahin", "na", "not really", "not needed", "zaroorat nahi", "don't want", "dont want", "no need"]
+WAIT = [
+    "not now", "later", "baad mein", "baad me", "busy", "abhi nahi", "kal", "tomorrow",
+    "next week", "call later", "give me time", "sochta", "sochti", "soch ke", "will think",
+    "let me think", "in a meeting",
+]
+OFF_TOPIC = [
+    "gst", "income tax", "itr", "tax filing", "loan", "insurance", "flight", "hotel booking",
+    "passport", "visa", "salary", "bank account", "credit card", "stock market", "crypto",
+]
+PRICE_Q = ["cost", "price", "pricing", "charges", "charge", "fee", "fees", "kitna", "kitne", "paise", "rupees", "how much"]
+IDENTITY_Q = ["who are you", "what is this", "what do you do", "kaun ho", "kya hai ye", "ye kya hai", "what's this"]
+ACTION_REQ = ["update", "change", "add", "set", "upload", "edit", "fix", "post", "remove"]
+QUESTION_START = (
+    "what", "how", "why", "when", "where", "which", "who", "can", "could", "do ", "does", "is ",
+    "are ", "will", "kya", "kaise", "kitna", "kitne", "kab", "kahan", "kaun", "kyun",
+)
+HINDI_TOKENS = [
+    "hai", "hain", "nahi", "kya", "karo", "kar", "mujhe", "aap", "haan", "kitne", "kaise",
+    "chahiye", "judna", "theek", "bhi", "mein", "kal", "abhi", "batao", "kijiye",
+]
+
+
+THANKS = ["thanks", "thank you", "thx", "ty", "shukriya", "dhanyavaad", "dhanyawad", "great", "👍", "🙏"]
+RECAP = ["what were you saying", "tell me more", "go on", "explain", "batao", "kya keh rahe", "what was it", "say again"]
+
+
+def _is_opt_out(text: str) -> bool:
+    """Bare 'STOP' / 'stop.' or an explicit opt-out phrase; 'stop wasting my time' is abuse, not opt-out."""
+    return bool(re.fullmatch(r"stop[.! ]*", text)) or _has(text, OPT_OUT)
+
+
 def is_auto_reply(message: str, conv: ConversationState) -> bool:
     text = _norm(message)
     if not text:
         return False
-    for pat in AUTO_REPLY_PATTERNS:
-        if re.search(pat, text):
-            return True
-    merchant_msgs = [t["msg"] for t in conv.turns if t.get("from") == "merchant"]
-    if len(merchant_msgs) >= 2 and merchant_msgs[-1] == merchant_msgs[-2]:
+    if any(re.search(p, text) for p in AUTO_REPLY):
         return True
-    return False
+    previous = [_norm(t["msg"]) for t in conv.turns[:-1] if t.get("from") in ("merchant", "customer")]
+    return len(text) > 25 and text in previous
 
 
-def is_affirmative(message: str) -> bool:
-    text = _norm(message)
-    return any(re.search(p, text) for p in AFFIRMATIVE_PATTERNS)
+def _is_question(text: str) -> bool:
+    return "?" in text or text.startswith(QUESTION_START)
 
 
-def is_negative_or_hostile(message: str) -> bool:
-    text = _norm(message)
-    return any(re.search(p, text) for p in NEGATIVE_PATTERNS + HOSTILE_PATTERNS)
+def _speaks_hindi(text: str) -> bool:
+    if re.search(r"[ऀ-ॿ]", text):
+        return True
+    words = set(re.findall(r"[a-z]+", text))
+    return len(words & set(HINDI_TOKENS)) >= 1 and not words & {"the", "is", "are", "you", "what", "how"}
 
 
-def is_off_topic(message: str) -> bool:
-    text = _norm(message)
-    topics = ["gst", "loan", "hotel", "flight", "income tax", "itr", "salary", "passport"]
-    return any(t in text for t in topics)
+# ---------------------------------------------------------------------------
+# Concrete deliverables (action mode actually ships something)
+# ---------------------------------------------------------------------------
 
+def _draft(conv: ConversationState, merchant: Dict[str, Any], category: Dict[str, Any], trigger: Dict[str, Any]) -> str:
+    kind = (conv.trigger_kind or trigger.get("kind") or "").lower()
+    payload = trigger.get("payload") or {}
+    biz = _biz_name(merchant)
+    locality = (merchant.get("identity") or {}).get("locality") or ""
+    live = _live_offers(merchant)
+    offer = live[0] if live else None
 
-def _owner(merchant: Optional[Dict[str, Any]]) -> str:
-    return ((merchant or {}).get("identity") or {}).get("owner_first_name") or "there"
-
-
-def _active_offer(merchant: Optional[Dict[str, Any]]) -> Optional[str]:
-    for o in (merchant or {}).get("offers") or []:
-        if o.get("status") == "active" and o.get("title"):
-            return o["title"]
-    return None
-
-
-def _action_body(conv: ConversationState, merchant: Optional[Dict[str, Any]], turn: int) -> str:
-    """Concrete next step — varies by trigger kind and turn (not one canned line)."""
-    owner = _owner(merchant)
-    offer = _active_offer(merchant)
-    kind = (conv.trigger_kind or "").lower()
-    last = (conv.last_bot_body or "").lower()
-
-    # Second+ action turn: close the loop
-    if turn >= 2:
-        if offer:
+    if "cde" in kind:
+        item = _digest_by_id(category, payload.get("digest_item_id")) or _digest_by_kind(category, ("cde",))
+        if item:
             return (
-                f"Sending now, {owner}. Draft locked around {offer}. "
-                f"Reply CONFIRM to publish, or EDIT with one change."
+                f"Calendar hold: {item.get('title')} — {item.get('date', '')[:16].replace('T', ' ')} "
+                f"({payload.get('credits') or item.get('credits')} CDE credits).\n"
+                f"Registration: {item.get('actionable') or item.get('source')}. I'll send the link here once you confirm."
             )
-        return (
-            f"Proceeding now, {owner} — draft is ready. "
-            f"Reply CONFIRM to send, or tell me one edit."
-        )
-
-    if "research" in kind or "digest" in kind or "abstract" in last or "jida" in last:
-        return (
-            f"Done {owner}. Pulling the abstract now + drafting a 90-sec patient WhatsApp. "
-            f"I'll paste both here in a minute — reply EDIT or CONFIRM."
-        )
-    if "recall" in kind or "appointment" in kind or "refill" in kind:
-        return (
-            f"Done {owner}. Booking/reminder flow started. "
-            f"I'll confirm the slot with the customer and update you. Reply STOP to cancel."
-        )
-    if "perf" in kind or "dip" in kind or "spike" in kind:
-        hook = f" around {offer}" if offer else ""
-        return (
-            f"Done {owner}. Drafting the recovery/momentum WhatsApp{hook} + a Google post now. "
-            f"Reply EDIT or CONFIRM when you see it."
-        )
-    if "festival" in kind or "ipl" in kind or "seasonal" in kind:
-        hook = f" featuring {offer}" if offer else ""
-        return (
-            f"Done {owner}. Drafting the timed campaign WhatsApp{hook} + Insta/Google line. "
-            f"Live draft in ~2 min — reply CONFIRM to push."
-        )
-    if "competitor" in kind:
-        hook = f" with {offer}" if offer else " with a photo refresh + clear offer pin"
-        return (
-            f"Done {owner}. Counter-move draft{hook} coming next. "
-            f"Reply CONFIRM to use it this week."
-        )
-    if "curious" in kind or "search" in last or "rising" in last:
-        hook = f" — {offer}" if offer else ""
-        return (
-            f"Done {owner}. Drafting the demand-catch WhatsApp{hook} + matching Google post. "
-            f"Reply EDIT or CONFIRM."
-        )
+    if "research" in kind:
+        item = _digest_by_id(category, payload.get("top_item_id")) or _digest_by_kind(category, ("research",))
+        if item:
+            return (
+                f"Patient WhatsApp draft:\n\"Hi! {biz} here. New research ({item.get('source')}) shows "
+                f"{(item.get('title') or '').lower()}. If you've had cavities recently, ask us whether a "
+                f"shorter recall suits you. Reply YES to book a check.\""
+            )
+    if "regulation" in kind or "compliance" in kind:
+        item = _digest_by_id(category, payload.get("top_item_id")) or _digest_by_kind(category, ("compliance",))
+        if item:
+            return (
+                f"Checklist draft ({item.get('source')}):\n1. {item.get('actionable') or 'Review the circular'}\n"
+                f"2. Note the change: {(item.get('summary') or '').split('. ')[0]}.\n"
+                f"3. File the updated SOP with today's date and keep a copy at reception."
+            )
     if "review" in kind:
+        theme = (payload.get("theme") or "the issue").replace("_", " ")
         return (
-            f"Done {owner}. Writing (1) a reply template for that review theme and "
-            f"(2) a 3-bullet ops fix note for your team. Reply CONFIRM."
+            f"Reply template:\n\"Thank you for the feedback — you're right about the {theme}, and we're fixing it this week. "
+            f"Please give us another try and ask for the owner directly.\"\n"
+            f"Team note: 1) name one owner for {theme} 2) track it daily for 2 weeks 3) review on Monday."
+        )
+    if "competitor" in kind and offer:
+        return f"Google post draft:\n\"{offer} at {biz}{', ' + locality if locality else ''} — what's included, explained up front. Book on WhatsApp or call.\""
+    if "planning" in kind:
+        topic = (payload.get("intent_topic") or "the program").replace("_", " ")
+        return (
+            f"Launch copy draft — {topic}:\n\"New at {biz}: {topic}. Limited spots, fixed start date."
+            f"{' Starting from ' + offer + '.' if offer else ''} Reply on WhatsApp to reserve.\"\n"
+            f"Tell me the start date + price and I'll finalise it."
         )
     if "renewal" in kind or "winback" in kind:
+        perf = merchant.get("performance") or {}
         return (
-            f"Done {owner}. Preparing your 1-page ROI / renewal summary from recent activity. "
-            f"I'll send it here — reply if you want a shorter version."
+            f"Summary — last {perf.get('window_days', 30)} days for {biz}: {perf.get('views', 0):,} Google views, "
+            f"{perf.get('calls', 0)} calls, {perf.get('directions', 0)} direction requests, {perf.get('leads', 0)} leads."
+        )
+    if "gbp" in kind or "unverified" in kind:
+        return (
+            "Steps: 1) Open business.google.com → your listing 2) Tap 'Get verified' 3) Choose phone call if offered "
+            "(fastest), else postcard 4) Send me the code here and I'll check it's done."
+        )
+    if "supply" in kind:
+        batches = ", ".join(payload.get("affected_batches") or [])
+        molecule = payload.get("molecule") or "the recalled medicine"
+        return (
+            f"Customer WhatsApp draft:\n\"Namaste, {biz} here. A {molecule} batch ({batches}) has been recalled as a precaution. "
+            f"If yours is from this batch, bring it in and we'll replace it free.\"\nShelf: pull {batches} today."
         )
     if offer:
-        return (
-            f"Done {owner}. Next step: draft ready around {offer}. "
-            f"I'll send the WhatsApp copy + one Google post line. Reply EDIT or CONFIRM."
-        )
-    return (
-        f"Done {owner}. Switching to action — I'll deliver the concrete draft next "
-        f"(WhatsApp copy + next step). Reply EDIT or CONFIRM."
-    )
+        return f"Google post draft:\n\"{offer} at {biz}{', ' + locality if locality else ''}. Message us on WhatsApp to book.\""
+    return f"Google post draft:\n\"{biz}{', ' + locality if locality else ''} — message us on WhatsApp to book your slot this week.\""
+
+
+# ---------------------------------------------------------------------------
+# Main entry
+# ---------------------------------------------------------------------------
+
+def _send(conv: ConversationState, body: str, cta: str, rationale: str) -> Dict[str, Any]:
+    if any(body.strip() == b.strip() for b in conv.bot_bodies):
+        conv.mode = "ended"
+        return {"action": "end", "rationale": "Would repeat an earlier message verbatim; ending instead."}
+    conv.bot_bodies.append(body)
+    conv.last_bot_body = body
+    return {"action": "send", "body": body, "cta": cta, "rationale": rationale}
+
+
+def _end(conv: ConversationState, rationale: str) -> Dict[str, Any]:
+    conv.mode = "ended"
+    return {"action": "end", "rationale": rationale}
 
 
 def handle_reply(
     conv: ConversationState,
     message: str,
     merchant: Optional[Dict[str, Any]] = None,
+    category: Optional[Dict[str, Any]] = None,
+    trigger: Optional[Dict[str, Any]] = None,
+    customer: Optional[Dict[str, Any]] = None,
+    from_role: str = "merchant",
 ) -> Dict[str, Any]:
+    merchant, category, trigger = merchant or {}, category or {}, trigger or {}
+    text = _norm(message)
+    hindi = _speaks_hindi(text)
+    hl = lambda en, hi: hi if hindi else en  # noqa: E731 — per-turn language mirroring
+    owner = _owner(merchant, category) if merchant else "there"
+    name = "" if owner == "there" else f" {owner}"
+
     if conv.mode == "ended":
-        return {
-            "action": "end",
-            "rationale": "Conversation already ended; not re-opening.",
-        }
+        return {"action": "end", "rationale": "Conversation already ended; not re-opening."}
+    if len(conv.bot_bodies) >= MAX_BOT_TURNS:
+        return _end(conv, f"Reached {MAX_BOT_TURNS} bot turns; closing to avoid fatigue.")
 
-    # Hostile / hard opt-out first (replay: abuse → end gracefully, don't argue)
-    if is_negative_or_hostile(message):
-        conv.mode = "ended"
-        return {
-            "action": "end",
-            "rationale": "Merchant opted out or hostile; graceful exit with no further pushes.",
-        }
+    # 1. Explicit opt-out: honour immediately.
+    if _is_opt_out(text):
+        return _end(conv, "Merchant opted out (STOP / not interested); no further messages.")
 
-    # Auto-reply: try once (gold Pattern B), then end
+    # 2. Abuse without opt-out: one calm de-escalation, then exit on repeat.
+    if _has(text, ABUSE):
+        conv.hostile_hits += 1
+        if conv.hostile_hits > 1:
+            return _end(conv, "Repeated hostility; graceful exit.")
+        return _send(conv, hl(
+            f"Sorry for the bother{name}. I only message about {_biz_name(merchant)}'s Google listing and customer "
+            f"offers. Reply STOP and I won't message again.",
+            f"Pareshani ke liye sorry{name}. Main sirf {_biz_name(merchant)} ke Google listing aur offers ke liye message karti hoon. "
+            f"STOP likhiye, phir message nahi aayega.",
+        ), "binary_yes_no", "Hostile reply: apologised once, stated scope, offered STOP (no arguing).")
+
+    # 3. WhatsApp Business auto-reply: one owner check (Pattern B), then exit.
     if is_auto_reply(message, conv):
         conv.auto_reply_hits += 1
-        if conv.auto_reply_hits == 1:
-            owner = _owner(merchant)
-            name = f" {owner}" if owner != "there" else ""
-            body = (
-                f"Samajh gayi{name}. Team tak pahunchane se pehle — "
-                f"kya aap khud dekhna chahenge ki exact next step kya hai? "
-                f"2 minute ka kaam hai. Owner/manager ho to YES, warna main later reconnect kar lungi."
-            )
-            conv.last_bot_body = body
-            return {
-                "action": "send",
-                "body": body,
-                "cta": "binary_yes_no",
-                "rationale": "First auto-reply hit: one owner-check (Pattern B), then stop if it repeats.",
-            }
-        # Replay "auto-reply hell": same canned text repeatedly → polite exit, no more burns
-        conv.mode = "ended"
-        return {
-            "action": "end",
-            "rationale": "Repeated auto-reply; ending politely without burning more turns.",
-        }
+        if conv.auto_reply_hits > 1:
+            return _end(conv, "Auto-reply repeated; exiting instead of burning turns.")
+        return _send(conv,
+            f"Samajh gayi{name} — lagta hai ye auto-reply hai. Owner/manager dekh rahe hon to bas YES likh dijiye, "
+            f"2 minute ka kaam hai. Warna main baad mein reconnect kar lungi.",
+            "binary_yes_no", "Auto-reply detected: one owner check (Pattern B), exit if it repeats.")
 
-    # Intent → action (contextual deliverable)
-    if is_affirmative(message) or conv.mode == "action":
+    # Task already delivered: a thank-you closes the loop instead of re-pitching.
+    if conv.action_sends >= 2 and (_has(text, THANKS) or _has(text, AFFIRM)):
+        return _end(conv, "Task delivered and acknowledged; closing the loop.")
+
+    # 4. Customer-facing booking flow (merchant_on_behalf conversations).
+    if from_role == "customer":
+        return _customer_reply(conv, text, hindi, merchant, trigger, customer)
+
+    # 5. Explicit join / action intent: act now, no re-qualification (Pattern D fix).
+    polite_request = not _is_question(text) or text.startswith(("can you", "could you", "please", "will you", "kya aap"))
+    negated = _has(text, ["no", "not", "don't", "dont", "nahi", "mat", "never"])
+    wants_action = _has(text, JOIN_INTENT) or (_has(text, ACTION_REQ) and polite_request and not negated)
+    if wants_action:
         conv.mode = "action"
-        send_n = conv.action_sends + 1
-        body = _action_body(conv, merchant, send_n)
-        conv.action_sends = send_n
-        if conv.last_bot_body and body.strip() == conv.last_bot_body.strip():
-            body = (
-                f"Here is the concrete next step: I'm queuing the send now. "
-                f"Reply CONFIRM to publish or STOP to hold."
+        if _has(text, JOIN_INTENT):
+            body = hl(
+                f"Great{name} — starting your setup now. I'll need just one thing: the best number for the onboarding "
+                f"call (or reply SAME for this one). Our team will confirm the slot here.",
+                f"Badhiya{name} — setup abhi shuru kar rahi hoon. Bas ek cheez: onboarding call ke liye number bhej dijiye "
+                f"(ya SAME likhiye isi number ke liye). Team yahin slot confirm karegi.",
             )
-        conv.last_bot_body = body
-        return {
-            "action": "send",
-            "body": body,
-            "cta": "binary_yes_no",
-            "rationale": "Affirmative intent → action mode with trigger-specific next step (no re-qualification).",
-        }
+            return _send(conv, body, "open_ended", "Join intent: switched straight to action (one required detail only).")
+        request = re.sub(r"^(can|could|will) you (please )?|^please ", "", message.strip().rstrip("?.!"), flags=re.I)
+        body = hl(
+            f"On it{name}: \"{request}\". I'll make the change and confirm here; Google usually takes 24-48 hours to "
+            f"show edits. Anything else to add while I'm in there?",
+            f"Ho jayega{name}: \"{request}\". Change karke yahin confirm karungi; Google pe dikhne mein 24-48 ghante "
+            f"lagte hain. Aur kuch add karna hai?",
+        )
+        return _send(conv, body, "open_ended", "Concrete action request: executed + honest timeline (Pattern A).")
 
-    # Off-topic redirect (replay: GST/loan etc. — stay on-mission, don't pretend expertise)
-    if is_off_topic(message):
-        body = (
-            "Samajh gayi — GST/tax/loan isn't something I handle. "
-            "I can help with Google profile, offers, campaigns, or customer recalls. "
-            "Want to continue on one of those, or should I stop here?"
-        )
-        conv.last_bot_body = body
-        return {
-            "action": "send",
-            "body": body,
-            "cta": "open_ended",
-            "rationale": "Off-topic ask; stayed on-mission politely.",
-        }
+    # 6. Wait / soft refusal.
+    if _has(text, WAIT):
+        return {"action": "wait", "wait_seconds": 86400 if _has(text, ["kal", "tomorrow"]) else 3 * 3600,
+                "rationale": "Merchant asked for time; backing off instead of pushing."}
+    if _has(text, SOFT_NO) and not _has(text, AFFIRM) and not _is_question(text):
+        return _end(conv, "Merchant declined; exiting politely without another pitch.")
 
-    # Default: single low-friction binary
-    owner = _owner(merchant)
-    offer = _active_offer(merchant)
-    if offer:
-        body = (
-            f"Got it {owner}. Fastest path: should I draft around your live {offer} now (YES), "
-            f"or tweak the angle first (EDIT)?"
-        )
-    else:
-        body = (
-            f"Got it {owner}. To move fast: should I (A) draft the message now, or "
-            f"(B) adjust the offer/angle first? Reply A or B."
-        )
-    if conv.last_bot_body and body == conv.last_bot_body:
-        body = f"Quick choice {owner}: draft now (YES) or pause (STOP)?"
-    conv.last_bot_body = body
-    return {
-        "action": "send",
-        "body": body,
-        "cta": "binary_yes_no",
-        "rationale": "Continuing qualification with one low-friction binary choice.",
+    # 7. Off-topic: stay on mission, don't fake expertise.
+    if _has(text, OFF_TOPIC):
+        conv.off_topic_hits += 1
+        if conv.off_topic_hits > 1:
+            return _end(conv, "Repeated off-topic asks; closing politely.")
+        return _send(conv, hl(
+            f"That one's outside what I can help with{name} — a CA or your bank is the right person. "
+            f"What I can do today is the {_topic(conv, trigger)}. Want me to continue with that?",
+            f"Ye mere scope se bahar hai{name} — iske liye CA ya bank sahi rahega. Main aaj {_topic(conv, trigger)} "
+            f"mein madad kar sakti hoon. Continue karein?",
+        ), "binary_yes_no", "Off-topic ask: honest redirect to the mission, single CTA.")
+
+    # 8a. "What were you saying?" after a detour: short recap of the opener, then the same single CTA.
+    if _has(text, RECAP) and conv.bot_bodies:
+        opener = " ".join(re.split(r"(?<=[.!?])\s+", conv.bot_bodies[0])[:2])
+        return _send(conv, hl(f"Short version: {opener} Want the {_topic(conv, trigger)}?",
+                              f"Short mein: {opener} {_topic(conv, trigger).capitalize()} bhej doon?"),
+                     "binary_yes_no", "Recap requested: restated the trigger fact + same single CTA.")
+
+    # 8. Questions get answers, not another qualifying question.
+    if _is_question(text):
+        return _answer(conv, text, hl, name, merchant, trigger)
+
+    # 9. Affirmative: deliver, then confirm, then close.
+    if _has(text, AFFIRM) or (conv.mode == "action" and _has(text, ["confirm", "go", "publish"])):
+        conv.action_sends += 1
+        conv.mode = "action"
+        if conv.action_sends == 1:
+            body = f"{hl('Here you go', 'Ye raha draft')}{name}:\n\n{_draft(conv, merchant, category, trigger)}\n\n" + hl(
+                "Reply CONFIRM to use it as-is, or send one change.", "CONFIRM likhiye ya ek change bataiye.")
+            return _send(conv, body, "binary_yes_no", "Affirmative → delivered the actual draft (no re-qualification).")
+        if conv.action_sends == 2:
+            if "post" in _topic(conv, trigger):
+                body = hl(f"Done{name} — it's queued. I'll share how it performed (views/calls) in 7 days.",
+                          f"Ho gaya{name} — queue kar diya. 7 din mein views/calls ka result share karungi.")
+            else:
+                body = hl(f"Done{name} — I'll confirm here as soon as it's complete.",
+                          f"Ho gaya{name} — complete hote hi yahin confirm karungi.")
+            return _send(conv, body, "none", "Confirmed → executed and set a follow-up expectation.")
+        return _end(conv, "Task delivered and confirmed; closing the loop.")
+
+    # 10. Unclear: one clarifying binary, never twice in a row.
+    if conv.clarify_hits >= 1:
+        return {"action": "wait", "wait_seconds": 6 * 3600, "rationale": "Still unclear after one clarification; giving space."}
+    conv.clarify_hits += 1
+    return _send(conv, hl(
+        f"Got it{name}. Should I go ahead with the {_topic(conv, trigger)} (YES), or leave it for now (STOP)?",
+        f"Samajh gayi{name}. {_topic(conv, trigger)} ke saath aage badhun (YES), ya abhi rehne dein (STOP)?",
+    ), "binary_yes_no", "Unclear reply: one binary clarification.")
+
+
+def _topic(conv: ConversationState, trigger: Dict[str, Any]) -> str:
+    kind = (conv.trigger_kind or trigger.get("kind") or "").lower()
+    topics = {
+        "research": "patient-ed WhatsApp draft", "regulation": "compliance checklist", "review": "review reply template",
+        "competitor": "counter-post draft", "renewal": "plan summary", "winback": "restart summary",
+        "gbp": "Google verification", "supply": "recall WhatsApp", "planning": "launch copy",
+        "milestone": "review-request WhatsApp", "festival": "festival post", "perf": "recovery post",
+        "cde": "calendar hold + registration details", "recall": "booking", "refill": "refill order",
     }
+    return next((v for k, v in topics.items() if k in kind), "Google post draft")
+
+
+def _answer(conv, text, hl, name, merchant, trigger) -> Dict[str, Any]:
+    payload = trigger.get("payload") or {}
+    if _has(text, PRICE_Q):
+        sub = merchant.get("subscription") or {}
+        amount = payload.get("renewal_amount")
+        if amount:
+            fact = hl(f"Your {sub.get('plan', '')} plan renewal is ₹{int(amount):,}.", f"Aapke {sub.get('plan', '')} plan ka renewal ₹{int(amount):,} hai.")
+        else:
+            fact = hl("I don't have the exact plan price in front of me and won't guess — the magicpin team will share it here.",
+                      "Exact price abhi mere paas nahi hai, guess nahi karungi — magicpin team yahin share karegi.")
+        body = f"{fact} " + hl(f"The {_topic(conv, trigger)} itself costs nothing extra. Want it?",
+                               f"{_topic(conv, trigger).capitalize()} ka koi extra charge nahi hai. Bhej doon?")
+        return _send(conv, body, "binary_yes_no", "Price question answered honestly (no invented price).")
+    if _has(text, IDENTITY_Q):
+        body = hl(
+            f"I'm Vera, magicpin's assistant for {_biz_name(merchant)} — I watch your Google listing and local demand, "
+            f"and draft posts/offers so you don't have to. Right now: a {_topic(conv, trigger)}. Want to see it?",
+            f"Main Vera hoon, magicpin ki assistant — {_biz_name(merchant)} ki Google listing aur local demand dekhti hoon, "
+            f"aur posts/offers draft karti hoon. Abhi: {_topic(conv, trigger)}. Dekhna chahenge?",
+        )
+        return _send(conv, body, "binary_yes_no", "Identity question answered + tied back to the trigger.")
+    body = hl(
+        f"Good question{name} — I don't have that detail and won't guess; I'll check with the team and reply here. "
+        f"Meanwhile, want the {_topic(conv, trigger)}?",
+        f"Achha sawaal{name} — ye detail abhi mere paas nahi hai, team se confirm karke yahin bataungi. "
+        f"Tab tak {_topic(conv, trigger)} bhej doon?",
+    )
+    return _send(conv, body, "binary_yes_no", "Unanswerable question: honest, no fabrication, kept momentum.")
+
+
+def _customer_reply(conv, text, hindi, merchant, trigger, customer) -> Dict[str, Any]:
+    payload = trigger.get("payload") or {}
+    slots = [s.get("label") for s in (payload.get("available_slots") or payload.get("next_session_options") or []) if s.get("label")]
+    name, _ = _customer_name(customer)
+    if hindi and name.lower().startswith("mr. "):
+        name = f"{name[4:]} ji"
+    who = "" if name == "there" else f" {name}"
+    biz = _biz_name(merchant)
+    hl = lambda en, hi: hi if hindi else en  # noqa: E731
+    choice = re.fullmatch(r"(1|2|first|second|pehla|doosra|dusra)\b.*", text)
+    if choice or _has(text, AFFIRM):
+        idx = 1 if choice and choice.group(1) in ("2", "second", "doosra", "dusra") else 0
+        if slots:
+            slot = slots[min(idx, len(slots) - 1)]
+            body = hl(f"Confirmed{who} ✅ {slot} at {biz}. Reply here if you need to change it.",
+                      f"Confirm ho gaya{who} ✅ {slot}, {biz}. Change karna ho to yahin reply karein.")
+        elif "refill" in (trigger.get("kind") or ""):
+            saved = payload.get("delivery_address_saved")
+            body = hl(f"Confirmed{who} ✅ {biz} will pack your refill" + (" and deliver it to your saved address." if saved else " and keep it ready for pickup."),
+                      f"Confirm ho gaya{who} ✅ {biz} aapka refill pack karke" + (" saved address pe deliver kar dega." if saved else " pickup ke liye ready rakhega."))
+        else:
+            body = hl(f"Thanks{who}! {biz} will message you shortly to fix a time that suits you.",
+                      f"Shukriya{who}! {biz} jaldi aapko time fix karne ke liye message karega.")
+        conv.mode = "done"
+        return _send(conv, body, "none", "Customer booked: confirmed the exact slot from context.")
+    if _has(text, SOFT_NO) or _has(text, WAIT):
+        return _end(conv, "Customer declined/deferred; no pressure on behalf of the merchant.")
+    body = hl(f"Thanks{who} — {biz}'s team will answer that personally. Should they call you (YES)?",
+              f"Shukriya{who} — {biz} ki team aapko personally bataegi. Call karein (YES)?")
+    return _send(conv, body, "binary_yes_no", "Customer question routed to merchant (no medical/price claims by bot).")

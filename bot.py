@@ -7,8 +7,9 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
 import os
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, wait as wait_futures
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -16,13 +17,18 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from composer import compose, trigger_expired
+from composer import _parse_dt, compose, llm_enabled, polish, trigger_expired
 from handlers import handle_reply
 from state import store
 
 load_dotenv()
 
-app = FastAPI(title="Vera — magicpin AI Challenge", version="1.2.0")
+VERSION = "1.3.0"
+SUBMITTED_AT = os.getenv("VERA_SUBMITTED_AT", "2026-10-06T00:00:00Z")
+TICK_BUDGET_S = float(os.getenv("VERA_TICK_BUDGET", "20"))  # judge timeout is 30s
+LLM_POOL = ThreadPoolExecutor(max_workers=20)  # own pool: slow LLM calls never hold up a response
+
+app = FastAPI(title="Vera — magicpin AI Challenge", version=VERSION)
 
 TEAM_NAME = os.getenv("VERA_TEAM_NAME", "Lovepreet")
 TEAM_MEMBERS = [m.strip() for m in os.getenv("VERA_TEAM_MEMBERS", "Lovepreet Singh").split(",") if m.strip()]
@@ -37,12 +43,12 @@ def _model_label() -> str:
 
 MODEL_NAME = _model_label()
 APPROACH = (
-    "v1.2: gold-pattern grounded compose (citations/numbers/offers), "
-    "category voice + Dr. salutation, newest-digest adaptation, "
-    "Groq polish with anti-fabrication + 6s fail-fast, "
-    "Pattern-B auto-reply / intent→action / hostile+off-topic replay-ready."
+    "Deterministic per-trigger-kind composer grounded in all 4 contexts (real payload keys, "
+    "live-vs-catalog offer honesty, language pref, placeholder fallbacks to merchant data); "
+    "optional temperature-0 LLM polish run concurrently under a 20s tick budget and rejected "
+    "if it adds any number; rule-based multi-turn (auto-reply, join intent, wait, questions, "
+    "abuse, off-topic, real drafts, customer slot booking)."
 )
-VERSION = "1.2.0"
 
 @app.get("/")
 async def root():
@@ -103,7 +109,7 @@ async def metadata():
         "approach": APPROACH,
         "contact_email": CONTACT_EMAIL,
         "version": VERSION,
-        "submitted_at": datetime.utcnow().isoformat() + "Z",
+        "submitted_at": SUBMITTED_AT,
     }
 
 
@@ -128,88 +134,92 @@ async def push_context(body: ContextBody):
 
 @app.post("/v1/tick")
 async def tick(body: TickBody):
-    actions: List[Dict[str, Any]] = []
-    used_merchants = set()
+    now = _parse_dt(body.now)
+    triggers = store.list_triggers(body.available_triggers)
+    triggers.sort(key=lambda kv: -(kv[1].get("urgency") or 0))  # most urgent first
 
-    for trg_id, trigger in store.list_triggers(body.available_triggers):
-        if len(actions) >= 20:
+    planned: List[Dict[str, Any]] = []
+    used = set()  # one action per (merchant, customer) audience per tick
+    for trg_id, trigger in triggers:
+        if len(planned) >= 20:
             break
-
         if trigger_expired(trigger, body.now):
             continue
-
         suppression_key = trigger.get("suppression_key") or ""
         if suppression_key and store.is_suppressed(suppression_key):
             continue
-
         merchant_id = trigger.get("merchant_id")
-        if not merchant_id or merchant_id in used_merchants:
-            # One proactive action per merchant per tick keeps spam down
-            continue
-
-        merchant = store.get("merchant", merchant_id)
-        if not merchant:
-            continue
-        category = store.get_category_for_merchant(merchant)
-        if not category:
-            continue
-
         customer_id = trigger.get("customer_id")
+        if not merchant_id or (merchant_id, customer_id) in used:
+            continue
+        merchant = store.get("merchant", merchant_id)
+        category = store.get_category_for_merchant(merchant) if merchant else None
+        if not (merchant and category):
+            continue
         customer = store.get("customer", customer_id) if customer_id else None
+        if customer_id and not customer:
+            continue  # customer-scoped trigger without its customer context: don't guess
+        composed = compose(category, merchant, trigger, customer, now=now)
+        if store.already_sent(merchant_id, customer_id, composed["body"]):
+            continue  # same text to the same person twice = spam; restraint is rewarded
+        used.add((merchant_id, customer_id))
+        planned.append({
+            "trg_id": trg_id, "trigger": trigger, "merchant": merchant, "category": category,
+            "customer": customer, "composed": composed,
+        })
 
-        composed = compose(category, merchant, trigger, customer)
-        conversation_id = store.new_conversation_id(merchant_id, trg_id)
+    if llm_enabled() and planned:
+        # Polish concurrently in threads; anything not done within budget keeps its grounded draft.
+        futures = [LLM_POOL.submit(polish, p["composed"], p["category"], p["merchant"]) for p in planned]
+        done, _pending = await asyncio.to_thread(wait_futures, futures, TICK_BUDGET_S)
+        for p, fut in zip(planned, futures):
+            if fut in done and not fut.exception():
+                p["composed"] = fut.result()
+
+    actions: List[Dict[str, Any]] = []
+    for p in planned:
+        composed, trigger = p["composed"], p["trigger"]
+        merchant_id, customer_id = trigger.get("merchant_id"), trigger.get("customer_id")
+        conversation_id = store.new_conversation_id(merchant_id, p["trg_id"])
         conv = store.get_or_create_conversation(
-            conversation_id,
-            merchant_id=merchant_id,
-            customer_id=customer_id,
-            trigger_id=trg_id,
-            trigger_kind=trigger.get("kind"),
+            conversation_id, merchant_id=merchant_id, customer_id=customer_id,
+            trigger_id=p["trg_id"], trigger_kind=trigger.get("kind"),
         )
-        conv.last_bot_body = composed["body"]
         conv.turns.append({"from": "vera", "msg": composed["body"]})
-
-        if suppression_key:
-            store.mark_suppressed(suppression_key)
-        used_merchants.add(merchant_id)
-
-        actions.append(
-            {
-                "conversation_id": conversation_id,
-                "merchant_id": merchant_id,
-                "customer_id": customer_id,
-                "send_as": composed["send_as"],
-                "trigger_id": trg_id,
-                "template_name": composed["template_name"],
-                "template_params": composed["template_params"],
-                "body": composed["body"],
-                "cta": composed["cta"],
-                "suppression_key": composed["suppression_key"],
-                "rationale": composed["rationale"],
-            }
-        )
-
+        conv.bot_bodies.append(composed["body"])
+        conv.last_bot_body = composed["body"]
+        if composed["suppression_key"]:
+            store.mark_suppressed(composed["suppression_key"])
+        store.record_sent(merchant_id, customer_id, composed["body"])
+        actions.append({
+            "conversation_id": conversation_id,
+            "merchant_id": merchant_id,
+            "customer_id": customer_id,
+            "send_as": composed["send_as"],
+            "trigger_id": p["trg_id"],
+            "template_name": composed["template_name"],
+            "template_params": composed["template_params"],
+            "body": composed["body"],
+            "cta": composed["cta"],
+            "suppression_key": composed["suppression_key"],
+            "rationale": composed["rationale"],
+        })
     return {"actions": actions}
 
 
 @app.post("/v1/reply")
 async def reply(body: ReplyBody):
     conv = store.get_or_create_conversation(
-        body.conversation_id,
-        merchant_id=body.merchant_id,
-        customer_id=body.customer_id,
+        body.conversation_id, merchant_id=body.merchant_id, customer_id=body.customer_id,
     )
     conv.turns.append({"from": body.from_role, "msg": body.message, "turn": body.turn_number})
-
-    merchant = store.get("merchant", body.merchant_id or conv.merchant_id)
-    result = handle_reply(conv, body.message, merchant)
-
-    if result.get("action") == "send" and result.get("body"):
+    merchant = store.get("merchant", body.merchant_id or conv.merchant_id) or {}
+    category = store.get_category_for_merchant(merchant) if merchant else None
+    trigger = store.get("trigger", conv.trigger_id) or {}
+    customer = store.get("customer", body.customer_id or conv.customer_id)
+    result = handle_reply(conv, body.message, merchant, category, trigger, customer, from_role=body.from_role)
+    if result.get("action") == "send":
         conv.turns.append({"from": "vera", "msg": result["body"]})
-        conv.last_bot_body = result["body"]
-    if result.get("action") == "end":
-        conv.mode = "ended"
-
     return result
 
 

@@ -31,11 +31,15 @@ class ConversationState:
     customer_id: Optional[str] = None
     trigger_id: Optional[str] = None
     trigger_kind: Optional[str] = None
-    mode: str = "qualifying"  # qualifying | action | ended
+    mode: str = "qualifying"  # qualifying | action | done | ended
     turns: List[Dict[str, Any]] = field(default_factory=list)
     auto_reply_hits: int = 0
+    hostile_hits: int = 0
+    off_topic_hits: int = 0
+    clarify_hits: int = 0
     action_sends: int = 0
     last_bot_body: Optional[str] = None
+    bot_bodies: List[str] = field(default_factory=list)  # anti-repetition across the whole conversation
     started_at: str = field(default_factory=utc_now_iso)
 
 
@@ -50,6 +54,8 @@ class Store:
         self.conversations: Dict[str, ConversationState] = {}
         # suppression_key -> last used iso timestamp
         self.suppressions: Dict[str, str] = {}
+        # (merchant_id, customer_id, body) already sent proactively
+        self.sent_bodies: set = set()
 
     def uptime_seconds(self) -> int:
         return int(time.time() - self.started_at)
@@ -132,6 +138,14 @@ class Store:
         with self._lock:
             self.suppressions[key] = utc_now_iso()
 
+    def already_sent(self, merchant_id: str, customer_id: Optional[str], body: str) -> bool:
+        with self._lock:
+            return (merchant_id, customer_id, body.strip()) in self.sent_bodies
+
+    def record_sent(self, merchant_id: str, customer_id: Optional[str], body: str) -> None:
+        with self._lock:
+            self.sent_bodies.add((merchant_id, customer_id, body.strip()))
+
     def get_or_create_conversation(
         self,
         conversation_id: str,
@@ -170,6 +184,7 @@ class Store:
             self.contexts.clear()
             self.conversations.clear()
             self.suppressions.clear()
+            self.sent_bodies.clear()
 
 
 store = Store()
